@@ -6,35 +6,84 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { browserLogin, getAuthStatus, clearSession, getOwaToken } from '../auth/index.js';
 
+/** Minimum minutes remaining before we consider the token "still valid" (skip re-login). */
+const TOKEN_VALID_THRESHOLD_MINUTES = 10;
+
 export function registerAuthTools(server: McpServer): void {
   // ── outlook_login ────────────────────────────────────────────────────────
   server.tool(
     'outlook_login',
-    'Sign in to Outlook Web. Opens a browser only if not already authenticated — once signed in, the session is saved and reused automatically.',
-    {},
-    async () => {
-      // Check if we already have valid (or refreshable) tokens — skip the browser if so
-      const existingToken = await getOwaToken();
-      if (existingToken) {
-        const status = getAuthStatus();
+    'Sign in to Outlook Web. Tries silently first (no browser); opens a browser only when the session has expired. Set force_new: true to force a full re-login.',
+    {
+      force_new: z.boolean().optional().describe(
+        'Force a full re-login even if a session exists — clears the saved session first. Default: false.',
+      ),
+    },
+    async ({ force_new }) => {
+      const forceNew = force_new ?? false;
+
+      // Fast path: valid token and not forcing re-login
+      if (!forceNew) {
+        const existingToken = await getOwaToken();
+        if (existingToken) {
+          const status = getAuthStatus();
+          const mins = status.owaTokenMinutesRemaining ?? 0;
+
+          if (mins >= TOKEN_VALID_THRESHOLD_MINUTES) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  message: `Already authenticated. Token valid for ${mins} more minutes.`,
+                  upn: status.upn,
+                  tokenStatus: {
+                    expiresAt: status.owaTokenExpiry,
+                    minutesRemaining: mins,
+                  },
+                }, null, 2),
+              }],
+            };
+          }
+        }
+      }
+
+      // Need to open a browser — warn the user not to close it
+      if (!forceNew) {
+        process.stderr.write(
+          '[msoutlook-mcp] Opening browser. Do NOT close the window — it closes automatically once signed in.\n',
+        );
+      }
+
+      const result = await browserLogin(forceNew);
+
+      if (!result) {
         return {
           content: [{
             type: 'text',
-            text: `Already signed in as ${status.upn ?? 'unknown'}. Token valid for ~${status.owaTokenMinutesRemaining ?? 0} more minutes. No browser needed.`,
+            text: JSON.stringify({
+              success: false,
+              message: 'Login failed. If you closed the browser window manually, run outlook_login again and wait for it to close on its own.',
+            }, null, 2),
           }],
         };
       }
 
-      // No valid token — open the browser for fresh login.
-      // Tell the user upfront: do NOT close the browser window, it closes itself.
-      process.stderr.write('[msoutlook-mcp] Opening browser. Do NOT close the window — it will close automatically once signed in.\n');
-      const upn = await browserLogin();
+      // Return path-specific message (mirrors msteams-mcp)
+      const messages: Record<typeof result.method, string> = {
+        'token-cache':    'Already authenticated. Token valid.',
+        'headless-sso':   'Login completed silently via SSO. Session has been saved.',
+        'headed-browser': 'Login completed successfully. Session has been saved.',
+      };
+
       return {
         content: [{
           type: 'text',
-          text: upn
-            ? `Signed in as ${upn}. Session saved — future calls will be silent (no browser).`
-            : 'Login failed. If you closed the browser window manually, please run outlook_login again and wait for the browser to close on its own.',
+          text: JSON.stringify({
+            success: true,
+            message: messages[result.method],
+            upn: result.upn,
+          }, null, 2),
         }],
       };
     },
@@ -46,36 +95,34 @@ export function registerAuthTools(server: McpServer): void {
     'Check the current authentication status and token validity.',
     {},
     async () => {
-      // Try to get a valid token (triggers refresh if needed)
       const token = await getOwaToken();
 
       if (!token) {
         return {
-          content: [{ type: 'text', text: 'Not authenticated. Run outlook_login to sign in.' }],
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ authenticated: false, message: 'Not authenticated. Run outlook_login to sign in.' }, null, 2),
+          }],
         };
       }
 
       const status = getAuthStatus();
-
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                authenticated: true,
-                tokenValid: !!token,
-                upn: status.upn,
-                tenantId: status.tenantId,
-                owaTokenExpiry: status.owaTokenExpiry,
-                owaTokenMinutesRemaining: status.owaTokenMinutesRemaining,
-                graphTokenExpiry: status.graphTokenExpiry,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            authenticated: true,
+            upn: status.upn,
+            tenantId: status.tenantId,
+            owaToken: {
+              expiresAt: status.owaTokenExpiry,
+              minutesRemaining: status.owaTokenMinutesRemaining,
+            },
+            graphToken: status.graphTokenExpiry ? {
+              expiresAt: status.graphTokenExpiry,
+            } : null,
+          }, null, 2),
+        }],
       };
     },
   );
@@ -88,7 +135,10 @@ export function registerAuthTools(server: McpServer): void {
     async () => {
       clearSession();
       return {
-        content: [{ type: 'text', text: 'Session cleared. Run outlook_login to sign in again.' }],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ success: true, message: 'Session cleared. Run outlook_login to sign in again.' }, null, 2),
+        }],
       };
     },
   );

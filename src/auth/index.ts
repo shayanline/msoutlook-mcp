@@ -11,7 +11,7 @@ import { readTokenCache } from './session-store.js';
 import { refreshOwaToken, refreshGraphToken } from './token-refresh.js';
 import { headlessTokenRefresh } from './browser-login.js';
 
-export { browserLogin } from './browser-login.js';
+export { browserLogin, headlessTokenRefresh, type LoginResult } from './browser-login.js';
 export { clearSession, hasSessionState, readTokenCache } from './session-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────

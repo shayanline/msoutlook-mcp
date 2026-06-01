@@ -19,6 +19,7 @@ import {
   getBrowserProfileDir,
   writeSessionState,
   writeTokenCache,
+  clearSession,
   type TokenCache,
 } from './session-store.js';
 import { extractTokensFromLocalStorage, getOwaLocalStorage } from './token-extractor.js';
@@ -232,7 +233,7 @@ async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promi
 // Headless login (primary)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function headlessLogin(): Promise<string | null> {
+export async function headlessLogin(): Promise<LoginResult | null> {
   logger.debug('Attempting headless (silent) login...');
 
   const profileDir = getBrowserProfileDir();
@@ -249,8 +250,9 @@ export async function headlessLogin(): Promise<string | null> {
     }
 
     const upn = await extractAndCacheTokens(context);
-    if (upn) logger.info(`Headless login succeeded (${upn})`);
-    return upn;
+    if (!upn) return null;
+    logger.info(`Headless login succeeded (${upn})`);
+    return { upn, method: 'headless-sso' };
   } catch {
     logger.debug('Headless login failed');
     return null;
@@ -263,7 +265,7 @@ export async function headlessLogin(): Promise<string | null> {
 // Headed login (fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function headedLogin(): Promise<string | null> {
+export async function headedLogin(): Promise<LoginResult | null> {
   logger.info('Opening browser for interactive login...');
 
   const profileDir = getBrowserProfileDir();
@@ -299,8 +301,9 @@ export async function headedLogin(): Promise<string | null> {
     }
 
     const upn = await extractAndCacheTokens(context);
-    if (upn) logger.info(`Headed login succeeded (${upn}). Browser closing.`);
-    return upn;
+    if (!upn) return null;
+    logger.info(`Headed login succeeded (${upn}). Browser closing.`);
+    return { upn, method: 'headed-browser' };
   } catch (err) {
     if (browserClosed) {
       logger.error('Login aborted — browser was closed before authentication completed.');
@@ -316,17 +319,39 @@ export async function headedLogin(): Promise<string | null> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Result type
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LoginResult {
+  upn: string;
+  /** How authentication was completed. */
+  method: 'token-cache' | 'headless-sso' | 'headed-browser';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function browserLogin(): Promise<string | null> {
-  if (hasSavedBrowserProfile()) {
-    const upn = await headlessLogin();
-    if (upn) return upn;
+/**
+ * Login to Outlook Web.
+ *
+ * @param forceNew - When true, clear the saved session and force a full
+ *   re-authentication (mirrors msteams-mcp's `forceNew` option).
+ */
+export async function browserLogin(forceNew = false): Promise<LoginResult | null> {
+  if (forceNew) {
+    clearSession();
+    logger.info('Forced re-login — cleared previous session.');
+  }
+
+  if (!forceNew && hasSavedBrowserProfile()) {
+    const result = await headlessLogin();
+    if (result) return result;
     logger.info('Headless login failed — falling back to visible browser...');
-  } else {
+  } else if (!forceNew) {
     logger.info('No saved browser profile — opening visible browser for first-time setup...');
   }
+
   return headedLogin();
 }
 
