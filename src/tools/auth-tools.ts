@@ -4,26 +4,36 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { browserLogin, isAuthenticated, getAuthStatus, clearSession } from '../auth/index.js';
-import { getOwaToken } from '../auth/index.js';
+import { browserLogin, getAuthStatus, clearSession, getOwaToken } from '../auth/index.js';
 
 export function registerAuthTools(server: McpServer): void {
   // ── outlook_login ────────────────────────────────────────────────────────
   server.tool(
     'outlook_login',
-    'Open a browser window to log in to Outlook Web. Required before using any other tools.',
+    'Sign in to Outlook Web. Opens a browser only if not already authenticated — once signed in, the session is saved and reused automatically.',
     {},
     async () => {
-      const success = await browserLogin();
-      return {
-        content: [
-          {
+      // Check if we already have valid (or refreshable) tokens — skip the browser if so
+      const existingToken = await getOwaToken();
+      if (existingToken) {
+        const status = getAuthStatus();
+        return {
+          content: [{
             type: 'text',
-            text: success
-              ? 'Successfully logged in to Outlook Web. Your session has been saved.'
-              : 'Login failed or timed out. Please try again.',
-          },
-        ],
+            text: `Already signed in as ${status.upn ?? 'unknown'}. Token valid for ~${status.owaTokenMinutesRemaining ?? 0} more minutes. No browser needed.`,
+          }],
+        };
+      }
+
+      // No valid token — open the browser for fresh login
+      const upn = await browserLogin();
+      return {
+        content: [{
+          type: 'text',
+          text: upn
+            ? `Signed in as ${upn}. Session saved — no browser needed for future calls.`
+            : 'Login failed or the browser was closed before completing. Please try again.',
+        }],
       };
     },
   );
@@ -34,21 +44,16 @@ export function registerAuthTools(server: McpServer): void {
     'Check the current authentication status and token validity.',
     {},
     async () => {
-      if (!isAuthenticated()) {
+      // Try to get a valid token (triggers refresh if needed)
+      const token = await getOwaToken();
+
+      if (!token) {
         return {
-          content: [
-            {
-              type: 'text',
-              text: 'Not authenticated. Run outlook_login to sign in.',
-            },
-          ],
+          content: [{ type: 'text', text: 'Not authenticated. Run outlook_login to sign in.' }],
         };
       }
 
       const status = getAuthStatus();
-
-      // Try to get a valid token (triggers refresh if needed)
-      const token = await getOwaToken();
 
       return {
         content: [

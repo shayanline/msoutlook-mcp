@@ -1,121 +1,87 @@
 /**
  * Playwright-based browser login flow for Outlook Web App.
  *
- * Opens a browser window to outlook.office.com, waits for the user to
- * sign in (or reuses an existing session), then extracts the MSAL tokens
- * from localStorage and caches them.
+ * Priority order:
+ * 1. Headless (silent) — reuses the persisted browser profile; user sees nothing
+ * 2. Headed (visible) — fallback when the session has expired and the user must sign in
  *
- * Mirrors the approach used by msteams-mcp for Microsoft Teams.
+ * After the initial headed login the session is persisted, so subsequent logins
+ * go through the headless path silently.
  */
 
 import { chromium, type BrowserContext } from 'playwright';
 import { logger } from '../utils/logger.js';
-import {
-  OWA_URL,
-  LOGIN_TIMEOUT_MS,
-  BROWSER_PROFILE_DIR,
-} from '../constants.js';
+import { OWA_URL, LOGIN_TIMEOUT_MS } from '../constants.js';
 import {
   getBrowserProfileDir,
   writeSessionState,
   writeTokenCache,
   type TokenCache,
 } from './session-store.js';
-import {
-  extractTokensFromLocalStorage,
-  getOwaLocalStorage,
-} from './token-extractor.js';
+import { extractTokensFromLocalStorage, getOwaLocalStorage } from './token-extractor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Login
+// Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Open a browser to Outlook Web and wait for successful login.
- * Extracts and caches tokens on success.
- *
- * @returns true if login succeeded and tokens were extracted
- */
-export async function browserLogin(): Promise<boolean> {
-  logger.info('Opening browser for Outlook Web login...');
+/** Wait for OWA to report itself as authenticated. */
+async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promise<void> {
+  const page = context.pages()[0] ?? await context.newPage();
+  await page.goto(OWA_URL, { waitUntil: 'domcontentloaded' });
 
-  const profileDir = getBrowserProfileDir();
-  let context: BrowserContext | null = null;
-
-  try {
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless: false,
-      channel: 'msedge',
-      args: [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-      ],
-    });
-
-    const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(OWA_URL, { waitUntil: 'domcontentloaded' });
-
-    logger.info('Waiting for Outlook to load and authenticate...');
-
-    // Wait until the mail app is loaded (the olk-isauthed flag is set)
-    await page.waitForFunction(
+  await Promise.race([
+    page.waitForFunction(
       () => localStorage.getItem('olk-isauthed') === 'true',
-      { timeout: LOGIN_TIMEOUT_MS },
-    );
-
-    logger.info('Outlook authenticated. Extracting tokens...');
-
-    // Save Playwright storage state (localStorage + cookies)
-    const state = await context.storageState();
-    writeSessionState(state);
-
-    // Extract tokens from localStorage
-    const ls = getOwaLocalStorage(state as unknown as Record<string, unknown>);
-    if (!ls) {
-      logger.error('Could not find Outlook origin in session state');
-      return false;
-    }
-
-    const tokens = extractTokensFromLocalStorage(ls);
-    if (!tokens) {
-      logger.error('Could not extract OWA tokens from localStorage');
-      return false;
-    }
-
-    // Cache the extracted tokens
-    const cache: TokenCache = {
-      owaToken: tokens.owaToken,
-      owaTokenExpiry: tokens.owaTokenExpiry.getTime(),
-      graphToken: tokens.graphToken,
-      graphTokenExpiry: tokens.graphTokenExpiry?.getTime(),
-      refreshToken: tokens.refreshToken,
-      tenantId: tokens.tenantId,
-      upn: tokens.upn,
-      extractedAt: Date.now(),
-    };
-    writeTokenCache(cache);
-
-    logger.info(`Logged in as ${tokens.upn ?? 'unknown'}. Tokens cached.`);
-    return true;
-  } catch (err) {
-    logger.error('Browser login failed', err);
-    return false;
-  } finally {
-    if (context) {
-      await context.close().catch(() => {});
-    }
-  }
+      { timeout: timeoutMs },
+    ),
+    page.waitForURL('**/mail/**', { timeout: timeoutMs }),
+  ]);
 }
 
+/** Extract MSAL tokens from the live browser context and write to cache. */
+async function extractAndCacheTokens(context: BrowserContext): Promise<string | null> {
+  const state = await context.storageState();
+  writeSessionState(state);
+
+  const ls = getOwaLocalStorage(state as unknown as Record<string, unknown>);
+  if (!ls) {
+    logger.debug('Could not find Outlook origin in session state');
+    return null;
+  }
+
+  const tokens = extractTokensFromLocalStorage(ls);
+  if (!tokens) {
+    logger.debug('Could not extract OWA tokens from localStorage');
+    return null;
+  }
+
+  const cache: TokenCache = {
+    owaToken: tokens.owaToken,
+    owaTokenExpiry: tokens.owaTokenExpiry.getTime(),
+    graphToken: tokens.graphToken,
+    graphTokenExpiry: tokens.graphTokenExpiry?.getTime(),
+    refreshToken: tokens.refreshToken,
+    tenantId: tokens.tenantId,
+    upn: tokens.upn,
+    extractedAt: Date.now(),
+  };
+  writeTokenCache(cache);
+  return tokens.upn ?? 'unknown';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Headless login (primary path)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Attempt a headless token refresh using the persisted browser profile.
- * This opens a headless browser to outlook.office.com — if the session
- * cookie is still valid, MSAL will silently refresh the access token.
+ * Attempt a completely silent login using the persisted browser profile.
+ * If the saved session cookies are still valid, MSAL will silently restore
+ * the session and we can extract fresh tokens without showing anything to the user.
  *
- * @returns true if tokens were refreshed successfully
+ * @returns the signed-in UPN on success, null if the session has expired
  */
-export async function headlessTokenRefresh(): Promise<boolean> {
-  logger.debug('Attempting headless token refresh via browser...');
+export async function headlessLogin(): Promise<string | null> {
+  logger.debug('Attempting headless (silent) login...');
 
   const profileDir = getBrowserProfileDir();
   let context: BrowserContext | null = null;
@@ -126,44 +92,95 @@ export async function headlessTokenRefresh(): Promise<boolean> {
       channel: 'msedge',
     });
 
-    const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(OWA_URL, { waitUntil: 'domcontentloaded' });
+    await waitForOwaAuth(context, 30_000);
 
-    // Wait briefly for MSAL to run its silent token acquisition
-    await page.waitForFunction(
-      () => localStorage.getItem('olk-isauthed') === 'true',
-      { timeout: 30_000 },
-    );
-
-    const state = await context.storageState();
-    writeSessionState(state);
-
-    const ls = getOwaLocalStorage(state as unknown as Record<string, unknown>);
-    if (!ls) return false;
-
-    const tokens = extractTokensFromLocalStorage(ls);
-    if (!tokens) return false;
-
-    const cache: TokenCache = {
-      owaToken: tokens.owaToken,
-      owaTokenExpiry: tokens.owaTokenExpiry.getTime(),
-      graphToken: tokens.graphToken,
-      graphTokenExpiry: tokens.graphTokenExpiry?.getTime(),
-      refreshToken: tokens.refreshToken,
-      tenantId: tokens.tenantId,
-      upn: tokens.upn,
-      extractedAt: Date.now(),
-    };
-    writeTokenCache(cache);
-
-    logger.info('Headless token refresh succeeded');
-    return true;
-  } catch (err) {
-    logger.debug('Headless token refresh failed', err);
-    return false;
+    const upn = await extractAndCacheTokens(context);
+    if (upn) logger.info(`Headless login succeeded (${upn})`);
+    return upn;
+  } catch {
+    // Session expired or not present — caller should fall back to headed login
+    logger.debug('Headless login failed — session likely expired');
+    return null;
   } finally {
-    if (context) {
+    await context?.close().catch(() => {});
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Headed login (fallback)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Open a visible browser window so the user can sign in interactively.
+ * Used only when headless login fails (session expired / first-time setup).
+ * The browser closes itself automatically once authentication completes.
+ *
+ * @returns the signed-in UPN on success, null on failure or manual close
+ */
+export async function headedLogin(): Promise<string | null> {
+  logger.info('Opening browser for interactive login (session expired or first-time setup)...');
+
+  const profileDir = getBrowserProfileDir();
+  let context: BrowserContext | null = null;
+  let browserClosed = false;
+
+  try {
+    context = await chromium.launchPersistentContext(profileDir, {
+      headless: false,
+      channel: 'msedge',
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    });
+
+    context.on('close', () => { browserClosed = true; });
+
+    await waitForOwaAuth(context, LOGIN_TIMEOUT_MS);
+
+    const upn = await extractAndCacheTokens(context);
+    if (upn) logger.info(`Headed login succeeded (${upn}). Browser closing.`);
+    return upn;
+  } catch (err) {
+    if (browserClosed) {
+      logger.error('Login aborted — browser was closed before authentication completed.');
+    } else {
+      logger.error('Headed login failed', err instanceof Error ? err.message : String(err));
+    }
+    return null;
+  } finally {
+    if (context && !browserClosed) {
       await context.close().catch(() => {});
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Login to Outlook Web, preferring headless (silent) mode.
+ * Falls back to a visible browser window only if the session has expired.
+ *
+ * @returns the signed-in UPN on success, null on failure
+ */
+export async function browserLogin(): Promise<string | null> {
+  // 1. Try headless first — completely silent if session is still alive
+  const upn = await headlessLogin();
+  if (upn) return upn;
+
+  // 2. Session expired — open a visible browser so the user can sign in
+  logger.info('Headless login failed. Falling back to visible browser...');
+  return headedLogin();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token refresh (used by auth/index.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Attempt a silent browser-based token refresh.
+ * Alias for headlessLogin() used in the token refresh pipeline.
+ */
+export async function headlessTokenRefresh(): Promise<boolean> {
+  const upn = await headlessLogin();
+  return upn !== null;
 }
