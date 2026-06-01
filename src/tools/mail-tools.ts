@@ -281,14 +281,30 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_search_emails ────────────────────────────────────────────────
   server.tool(
     'outlook_search_emails',
-    'Search emails by keyword across subject and body.',
+    'Search emails by keyword across subject and body, with optional received date range and pagination.',
     {
       query: z.string().describe('Search query (keywords, sender name, subject, etc.)'),
-      top: z.number().int().min(1).max(50).optional().describe('Max results (default 20)'),
+      top: z.number().int().min(1).max(50).optional().describe('Page size (default 20, max 50)'),
+      start_date: z.string().optional().describe('Only emails received on or after this date. ISO date (YYYY-MM-DD) or datetime.'),
+      end_date: z.string().optional().describe('Only emails received on or before this date. ISO date (YYYY-MM-DD) or datetime.'),
+      folder: z.string().optional().describe('Folder to search (default Inbox). E.g. Inbox, Archive, SentItems.'),
+      skip_token: z.string().optional().describe('To get the next page, pass the next_skip_token returned by a previous call.'),
     },
-    async ({ query, top }) => {
-      const messages = await searchMessages(query, top ?? 20);
-      return { content: [{ type: 'text', text: formatMessageList(messages) }] };
+    async ({ query, top, start_date, end_date, folder, skip_token }) => {
+      const { messages, nextSkipToken } = await searchMessages({
+        query,
+        top: top ?? 20,
+        startDate: start_date,
+        endDate: end_date,
+        folder,
+        skipToken: skip_token,
+      });
+
+      let text = formatMessageList(messages);
+      if (nextSkipToken) {
+        text += `\n\nMore results available. To get the next page, call outlook_search_emails again with the same query and:\nskip_token: ${nextSkipToken}`;
+      }
+      return { content: [{ type: 'text', text }] };
     },
   );
 

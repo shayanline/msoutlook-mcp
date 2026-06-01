@@ -224,12 +224,64 @@ export async function deleteMessage(id: string): Promise<void> {
 // Search
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function searchMessages(query: string, top = 20): Promise<Message[]> {
-  return listMessages({
-    search: query,
-    top,
-    select: ['Id', 'Subject', 'BodyPreview', 'From', 'ReceivedDateTime', 'IsRead', 'WebLink'],
-  });
+export interface SearchMessagesOptions {
+  query: string;
+  top?: number;
+  folder?: string;
+  /** Inclusive lower bound on received date (ISO date or datetime). */
+  startDate?: string;
+  /** Inclusive upper bound on received date (ISO date or datetime). */
+  endDate?: string;
+  /** Opaque page token from a previous result's nextSkipToken. */
+  skipToken?: string;
+}
+
+export interface SearchMessagesResult {
+  messages: Message[];
+  /** Pass this back as skipToken to fetch the next page; absent when there are no more results. */
+  nextSkipToken?: string;
+}
+
+/** Reduce an ISO date or datetime to the YYYY-MM-DD form KQL expects. */
+function toKqlDate(value: string): string {
+  return value.slice(0, 10);
+}
+
+/**
+ * Search messages with optional date range and pagination.
+ *
+ * The OWA REST API rejects $skip, $filter and $orderby alongside $search, so:
+ * - date range is expressed as KQL constraints inside the search string
+ *   (received>=START AND received<=END), and
+ * - pagination uses the $skiptoken returned in @odata.nextLink.
+ */
+export async function searchMessages(opts: SearchMessagesOptions): Promise<SearchMessagesResult> {
+  const folder = opts.folder ?? 'Inbox';
+
+  let kql = opts.query.trim();
+  if (opts.startDate) kql += ` AND received>=${toKqlDate(opts.startDate)}`;
+  if (opts.endDate) kql += ` AND received<=${toKqlDate(opts.endDate)}`;
+
+  const params: Record<string, string> = {
+    '$search': `"${kql}"`,
+    '$top': String(opts.top ?? 20),
+    '$select': 'Id,Subject,BodyPreview,From,ReceivedDateTime,IsRead,WebLink',
+  };
+  if (opts.skipToken) params['$skiptoken'] = opts.skipToken;
+
+  const res = await owaGet<ODataResponse<Message>>(`/MailFolders/${folder}/messages`, params);
+
+  let nextSkipToken: string | undefined;
+  const nextLink = res['@odata.nextLink'];
+  if (nextLink) {
+    try {
+      nextSkipToken = new URL(nextLink).searchParams.get('$skiptoken') ?? undefined;
+    } catch {
+      nextSkipToken = undefined;
+    }
+  }
+
+  return { messages: res.value, nextSkipToken };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

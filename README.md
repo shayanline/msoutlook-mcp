@@ -61,7 +61,7 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_list_emails` | List emails from any folder (Inbox by default) |
 | `outlook_get_email` | Read full email content by ID |
 | `outlook_get_unread` | Get unread emails from Inbox |
-| `outlook_search_emails` | Search emails by keyword |
+| `outlook_search_emails` | Search emails by keyword, with optional received date range and pagination |
 | `outlook_send_email` | Send an email |
 | `outlook_create_draft` | Create a draft without sending |
 | `outlook_send_draft` | Send a previously created draft |
