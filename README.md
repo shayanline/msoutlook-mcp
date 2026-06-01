@@ -1,6 +1,6 @@
 # msoutlook-mcp
 
-MCP server for Microsoft Outlook Web — no app registration required.
+MCP server for Microsoft Outlook Web. No app registration required.
 
 Uses your existing Outlook Web session (the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) uses the Teams web session). Opens a browser once for login, then caches tokens and refreshes them automatically.
 
@@ -9,7 +9,7 @@ Uses your existing Outlook Web session (the same way [msteams-mcp](https://githu
 Microsoft Outlook Web (OWA) uses MSAL to store OAuth tokens in `localStorage`. This server:
 
 1. Opens a browser to `outlook.office.com` via Playwright
-2. Extracts the MSAL token cache from `localStorage` — using OWA's own first-party client ID (`9199bf20-a13f-4107-85dc-02114787ef48`)
+2. Extracts the MSAL token cache from `localStorage`, using OWA's own first-party client ID (`9199bf20-a13f-4107-85dc-02114787ef48`)
 3. Caches the access token, refresh token, and session state in `~/.msoutlook-mcp-server/` (AES-256-GCM encrypted)
 4. Refreshes tokens automatically using the refresh token (HTTP, no browser) or headless browser as fallback
 
@@ -86,9 +86,9 @@ Then run `outlook_login` from your MCP client to open the browser and authentica
 
 Session files are stored encrypted in `~/.msoutlook-mcp-server/`:
 
-- `session-state.json` — Playwright browser session (cookies + localStorage)
-- `token-cache.json` — Extracted and cached tokens
-- `browser-profile/` — Persistent browser profile for headless refresh
+- `session-state.json`: Playwright browser session (cookies + localStorage)
+- `token-cache.json`: Extracted and cached tokens
+- `browser-profile/`: Persistent browser profile for headless refresh
 
 If your session expires, run `outlook_login` again.
 
@@ -96,8 +96,8 @@ If your session expires, run `outlook_login` again.
 
 Tokens are refreshed automatically:
 
-1. **HTTP refresh** (fast, no browser) — uses the cached refresh token with OWA's client ID
-2. **Headless browser refresh** — fallback if HTTP refresh fails; opens a headless Edge window to silently re-acquire tokens from the saved browser session
+1. **HTTP refresh** (fast, no browser): uses the cached refresh token with OWA's client ID
+2. **Headless browser refresh**: fallback if HTTP refresh fails; opens a headless Edge window to silently re-acquire tokens from the saved browser session
 
 ## Requirements
 
@@ -111,16 +111,16 @@ Tokens are refreshed automatically:
 |---------|-------|-------|---------|
 | Browser auto-detection | System default (Edge/Chrome) | Chrome fallback | Edge (pre-installed) |
 | SSO cookie import | ✅ Chrome + Edge via Keychain | ✅ Chrome + Edge via libsecret / `"peanuts"` fallback | ✅ Edge via DPAPI (PowerShell) |
-| Windows Chrome 127+ cookies | — | — | ⚠️ App-Bound Encryption — not supported. Use Edge instead. |
+| Windows Chrome 127+ cookies | n/a | n/a | ⚠️ App-Bound Encryption (not supported). Use Edge instead. |
 | Headed browser fallback | ✅ | ✅ | ✅ |
 
-Cookie import is a best-effort optimisation. If it cannot run (e.g. no matching browser installed, Keychain denied), the MCP falls back to opening a headed browser where you sign in once manually — the session then persists.
+Cookie import is a best-effort optimisation. If it cannot run (e.g. no matching browser installed, Keychain denied), the MCP falls back to opening a headed browser where you sign in once manually, and the session then persists.
 
 ## Security notes
 
-- Uses the same auth as the Outlook web client — your access is limited to what your account can do
+- Uses the same auth as the Outlook web client, so your access is limited to what your account can do
 - Tokens are encrypted at rest (AES-256-GCM with a machine-derived key)
-- Uses undocumented internal APIs — Microsoft may change these without notice
+- Uses undocumented internal APIs, which Microsoft may change without notice
 - Always confirm email content with the user before sending
 
 ## Environment variables
