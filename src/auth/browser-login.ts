@@ -10,6 +10,7 @@
  */
 
 import { chromium, type BrowserContext } from 'playwright';
+import { existsSync, readdirSync } from 'node:fs';
 import { logger } from '../utils/logger.js';
 import { OWA_URL, LOGIN_TIMEOUT_MS } from '../constants.js';
 import {
@@ -21,8 +22,17 @@ import {
 import { extractTokensFromLocalStorage, getOwaLocalStorage } from './token-extractor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared helpers
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true if the browser profile directory exists and has been populated
+ * by a previous login. Empty or missing profile = headless will definitely fail.
+ */
+function hasSavedBrowserProfile(): boolean {
+  const dir = getBrowserProfileDir();
+  return existsSync(dir) && readdirSync(dir).length > 0;
+}
 
 /** Wait for OWA to report itself as authenticated. */
 async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promise<void> {
@@ -92,7 +102,9 @@ export async function headlessLogin(): Promise<string | null> {
       channel: 'msedge',
     });
 
-    await waitForOwaAuth(context, 30_000);
+    // 10 s is plenty — if the saved session is valid it loads in 2–4 s.
+    // Failing fast avoids a 30 s wait before falling back to headed.
+    await waitForOwaAuth(context, 10_000);
 
     const upn = await extractAndCacheTokens(context);
     if (upn) logger.info(`Headless login succeeded (${upn})`);
@@ -163,12 +175,16 @@ export async function headedLogin(): Promise<string | null> {
  * @returns the signed-in UPN on success, null on failure
  */
 export async function browserLogin(): Promise<string | null> {
-  // 1. Try headless first — completely silent if session is still alive
-  const upn = await headlessLogin();
-  if (upn) return upn;
+  // 1. Try headless only if a saved profile exists — pointless otherwise
+  if (hasSavedBrowserProfile()) {
+    const upn = await headlessLogin();
+    if (upn) return upn;
+    logger.info('Headless login failed. Falling back to visible browser...');
+  } else {
+    logger.info('No saved browser profile — going straight to visible login.');
+  }
 
-  // 2. Session expired — open a visible browser so the user can sign in
-  logger.info('Headless login failed. Falling back to visible browser...');
+  // 2. Headed fallback — opens Edge so the user can sign in interactively
   return headedLogin();
 }
 

@@ -25,14 +25,16 @@ export function registerAuthTools(server: McpServer): void {
         };
       }
 
-      // No valid token — open the browser for fresh login
+      // No valid token — open the browser for fresh login.
+      // Tell the user upfront: do NOT close the browser window, it closes itself.
+      process.stderr.write('[msoutlook-mcp] Opening browser. Do NOT close the window — it will close automatically once signed in.\n');
       const upn = await browserLogin();
       return {
         content: [{
           type: 'text',
           text: upn
-            ? `Signed in as ${upn}. Session saved — no browser needed for future calls.`
-            : 'Login failed or the browser was closed before completing. Please try again.',
+            ? `Signed in as ${upn}. Session saved — future calls will be silent (no browser).`
+            : 'Login failed. If you closed the browser window manually, please run outlook_login again and wait for the browser to close on its own.',
         }],
       };
     },
