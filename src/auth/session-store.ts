@@ -1,22 +1,21 @@
 /**
- * Session storage for auth tokens.
+ * Secure session state storage.
  *
  * Stores Playwright session state (localStorage, cookies) and cached tokens
- * in ~/.msoutlook-mcp-server/. Data is encrypted at rest using AES-256-GCM
- * with a machine-derived key.
+ * in ~/.msoutlook-mcp-server/ (macOS/Linux) or %APPDATA%\msoutlook-mcp-server\ (Windows).
+ *
+ * Mirrors the storage approach from msteams-mcp:
+ * - scryptSync key derivation (hostname:username — machine-specific, memory-hard)
+ * - AES-256-GCM encryption at rest
+ * - JSON envelope {iv, content, tag, version} for future-proof migration
+ * - isEncrypted() check auto-migrates any legacy plaintext files
  */
 
-import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { scryptSync, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../utils/logger.js';
-import {
-  SESSION_DIR_NAME,
-  SESSION_STATE_FILE,
-  TOKEN_CACHE_FILE,
-  BROWSER_PROFILE_DIR,
-} from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -33,119 +32,162 @@ export interface TokenCache {
   extractedAt: number;
 }
 
+interface EncryptedEnvelope {
+  iv: string;
+  content: string;
+  tag: string;
+  version: 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config directory (platform-aware, mirrors msteams-mcp)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getHomeDirSafe(): string | null {
+  try { return homedir(); } catch { return null; }
+}
+
+function getConfigDir(): string {
+  const home = getHomeDirSafe();
+
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA ?? (home ? join(home, 'AppData', 'Roaming') : null);
+    if (appData) return join(appData, 'msoutlook-mcp-server');
+  }
+
+  if (home) return join(home, '.msoutlook-mcp-server');
+
+  // Fallback: alongside the dist directory
+  return join(process.cwd(), 'msoutlook-mcp-server-data');
+}
+
+export const CONFIG_DIR = getConfigDir();
+const SESSION_STATE_FILE = 'session-state.json';
+const TOKEN_CACHE_FILE   = 'token-cache.json';
+const BROWSER_PROFILE    = 'browser-profile';
+
+/** Session considered stale after this many hours (matches msteams-mcp). */
+const SESSION_EXPIRY_HOURS = 12;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Paths
 // ─────────────────────────────────────────────────────────────────────────────
 
-function getSessionDir(): string {
-  return join(homedir(), SESSION_DIR_NAME);
+export function getSessionStatePath(): string  { return join(CONFIG_DIR, SESSION_STATE_FILE); }
+export function getTokenCachePath(): string    { return join(CONFIG_DIR, TOKEN_CACHE_FILE); }
+export function getBrowserProfileDir(): string { return join(CONFIG_DIR, BROWSER_PROFILE); }
+
+function ensureConfigDir(): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
 
-export function getSessionStatePath(): string {
-  return join(getSessionDir(), SESSION_STATE_FILE);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Encryption — AES-256-GCM with scrypt-derived machine key (mirrors msteams-mcp)
+// ─────────────────────────────────────────────────────────────────────────────
 
-export function getTokenCachePath(): string {
-  return join(getSessionDir(), TOKEN_CACHE_FILE);
-}
+const SALT = 'msoutlook-mcp-credential-salt-v1';
 
-export function getBrowserProfileDir(): string {
-  return join(getSessionDir(), BROWSER_PROFILE_DIR);
-}
-
-function ensureSessionDir(): void {
-  const dir = getSessionDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+function deriveKey(): Buffer {
+  let machineId: string;
+  try {
+    machineId = `${hostname()}:${userInfo().username}`;
+  } catch {
+    machineId = CONFIG_DIR; // safe fallback
   }
+  return scryptSync(machineId, SALT, 32) as Buffer;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Encryption (AES-256-GCM with machine-derived key)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function getDerivedKey(): Buffer {
-  // Derive a key from a combination of the session dir path and hostname
-  // Not perfect but prevents casual file reading; matches msteams-mcp approach
-  const material = `msoutlook-mcp-${homedir()}-${process.platform}`;
-  return createHash('sha256').update(material).digest();
-}
-
-function encrypt(plaintext: string): string {
-  const key = getDerivedKey();
-  const iv = randomBytes(12);
+function encryptJson(plaintext: string): EncryptedEnvelope {
+  const key = deriveKey();
+  const iv  = randomBytes(16);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]).toString('base64');
+  let content = cipher.update(plaintext, 'utf8', 'hex');
+  content += cipher.final('hex');
+  return { iv: iv.toString('hex'), content, tag: cipher.getAuthTag().toString('hex'), version: 1 };
 }
 
-function decrypt(ciphertext: string): string {
-  const key = getDerivedKey();
-  const data = Buffer.from(ciphertext, 'base64');
-  const iv = data.subarray(0, 12);
-  const tag = data.subarray(12, 28);
-  const encrypted = data.subarray(28);
+function decryptEnvelope(env: EncryptedEnvelope): string {
+  if (env.version !== 1) throw new Error(`Unsupported encryption version: ${env.version}`);
+  const key = deriveKey();
+  const iv  = Buffer.from(env.iv, 'hex');
+  const tag = Buffer.from(env.tag, 'hex');
   const decipher = createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
-  return decipher.update(encrypted) + decipher.final('utf8');
+  let out = decipher.update(env.content, 'hex', 'utf8');
+  out += decipher.final('utf8');
+  return out;
+}
+
+function isEncryptedEnvelope(v: unknown): v is EncryptedEnvelope {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.iv === 'string' && typeof o.content === 'string'
+      && typeof o.tag === 'string' && o.version === 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic read/write helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function writeSecure(filePath: string, data: unknown): void {
+  ensureConfigDir();
+  const envelope = encryptJson(JSON.stringify(data));
+  writeFileSync(filePath, JSON.stringify(envelope, null, 2), { mode: 0o600, encoding: 'utf8' });
+}
+
+function readSecure<T>(filePath: string): T | null {
+  if (!existsSync(filePath)) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (isEncryptedEnvelope(parsed)) {
+      return JSON.parse(decryptEnvelope(parsed)) as T;
+    }
+    // Legacy plaintext — migrate to encrypted in place
+    logger.debug(`Migrating plaintext file to encrypted: ${filePath}`);
+    writeSecure(filePath, parsed);
+    return parsed as T;
+  } catch (err) {
+    logger.warn(`Failed to read ${filePath}`, err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Session State (Playwright storageState)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function writeSessionState(state: unknown): void {
-  ensureSessionDir();
-  const json = JSON.stringify(state);
-  writeFileSync(getSessionStatePath(), encrypt(json), { mode: 0o600 });
+export function writeSessionState(state: unknown): void { writeSecure(getSessionStatePath(), state); }
+export function readSessionState(): unknown | null      { return readSecure(getSessionStatePath()); }
+export function hasSessionState(): boolean              { return existsSync(getSessionStatePath()); }
+
+/** Returns the age of the session state file in hours, or null if it doesn't exist. */
+export function getSessionAge(): number | null {
+  const p = getSessionStatePath();
+  if (!existsSync(p)) return null;
+  return (Date.now() - statSync(p).mtimeMs) / (1000 * 60 * 60);
 }
 
-export function readSessionState(): unknown | null {
-  const path = getSessionStatePath();
-  if (!existsSync(path)) return null;
-  try {
-    const raw = readFileSync(path, 'utf8');
-    return JSON.parse(decrypt(raw));
-  } catch (err) {
-    logger.warn('Failed to read session state', err);
-    return null;
-  }
-}
-
-export function hasSessionState(): boolean {
-  return existsSync(getSessionStatePath());
+/** Returns true if the session state is missing or older than SESSION_EXPIRY_HOURS. */
+export function isSessionLikelyExpired(): boolean {
+  const age = getSessionAge();
+  return age === null || age > SESSION_EXPIRY_HOURS;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Cache
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function writeTokenCache(cache: TokenCache): void {
-  ensureSessionDir();
-  const json = JSON.stringify(cache);
-  writeFileSync(getTokenCachePath(), encrypt(json), { mode: 0o600 });
-}
-
-export function readTokenCache(): TokenCache | null {
-  const path = getTokenCachePath();
-  if (!existsSync(path)) return null;
-  try {
-    const raw = readFileSync(path, 'utf8');
-    return JSON.parse(decrypt(raw)) as TokenCache;
-  } catch (err) {
-    logger.warn('Failed to read token cache', err);
-    return null;
-  }
+export function writeTokenCache(cache: TokenCache): void { writeSecure(getTokenCachePath(), cache); }
+export function readTokenCache(): TokenCache | null      { return readSecure<TokenCache>(getTokenCachePath()); }
+export function clearTokenCache(): void {
+  const p = getTokenCachePath();
+  if (existsSync(p)) { try { rmSync(p); } catch { /* ignore */ } }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Clear
+// Full session clear
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function clearSession(): void {
-  const dir = getSessionDir();
-  if (existsSync(dir)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  if (existsSync(CONFIG_DIR)) rmSync(CONFIG_DIR, { recursive: true, force: true });
 }

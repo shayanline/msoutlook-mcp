@@ -230,6 +230,49 @@ async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MSAL token polling (mirrors msteams-mcp waitForTokenRefresh)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * When the browser session is valid (no login redirect) but MSAL tokens are
+ * still being acquired, poll localStorage in-browser until tokens appear.
+ * This is the case where session cookies are alive but the hour-long access
+ * token has expired — OWA JS silently acquires new ones.
+ *
+ * Polls in-browser to avoid deserialising the full session state on every
+ * check. Returns the UPN once tokens are available.
+ */
+async function waitForMsalTokens(
+  context: BrowserContext,
+  timeoutMs = 20_000,
+): Promise<boolean> {
+  const page = context.pages()[0];
+  if (!page) return false;
+
+  logger.debug('Waiting for MSAL to acquire tokens...');
+  const interval = 1_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const ready = await page.evaluate(() => {
+      if (localStorage.getItem('olk-isauthed') !== 'true') return false;
+      return Object.keys(localStorage).some(
+        k => k.includes('|accesstoken|') && k.includes('outlook.office.com'),
+      );
+    }).catch(() => false);
+
+    if (ready) {
+      logger.debug(`MSAL tokens appeared after ${Math.round((Date.now() - (deadline - timeoutMs)) / 1000)}s`);
+      return true;
+    }
+    await page.waitForTimeout(interval);
+  }
+
+  logger.debug('MSAL token wait timed out');
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Headless login (primary)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -243,9 +286,17 @@ export async function headlessLogin(): Promise<LoginResult | null> {
   try {
     context = await launchContext(profileDir, true, channel);
 
-    const authenticated = await waitForOwaAuth(context, 15_000);
+    const authenticated = await waitForOwaAuth(context, 5_000);
     if (!authenticated) {
-      logger.debug('Headless: session expired or not present');
+      logger.debug('Headless: session invalid or expired (login redirect detected)');
+      return null;
+    }
+
+    // Session is valid. Check if MSAL tokens are already there, or wait
+    // up to 20s for OWA JS to silently acquire them (mirrors msteams-mcp).
+    const tokensReady = await waitForMsalTokens(context, 20_000);
+    if (!tokensReady) {
+      logger.debug('Headless: MSAL tokens did not appear — falling back to headed login');
       return null;
     }
 
@@ -265,7 +316,29 @@ export async function headlessLogin(): Promise<LoginResult | null> {
 // Headed login (fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function headedLogin(): Promise<LoginResult | null> {
+/** Inject a visible progress overlay into the page (mirrors msteams-mcp). Failures are silently ignored — purely cosmetic. */
+async function showOverlay(page: import('playwright').Page, phase: 'pending' | 'saving' | 'done' | 'error'): Promise<void> {
+  const phases = {
+    pending: { icon: '⋯', title: "You're signed in!", detail: 'Setting up your Outlook connection...',  bg: '#5b5fc7' },
+    saving:  { icon: '⋯', title: 'Saving your session...',   detail: "So you won't need to log in again.", bg: '#5b5fc7' },
+    done:    { icon: '✓', title: 'All done!',                 detail: 'This window will close automatically.', bg: '#107c10' },
+    error:   { icon: '✕', title: 'Something went wrong',      detail: 'Please try again.',                 bg: '#c42b1c' },
+  };
+  const p = phases[phase];
+  try {
+    await page.evaluate(({ icon, title, detail, bg }) => {
+      const existing = document.getElementById('msoutlook-mcp-overlay');
+      if (existing) existing.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'msoutlook-mcp-overlay';
+      Object.assign(overlay.style, { position: 'fixed', inset: '0', background: 'rgba(0,0,0,.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: '999999', fontFamily: "'Segoe UI',system-ui,sans-serif" });
+      overlay.innerHTML = `<div style="background:white;border-radius:12px;padding:40px 48px;max-width:420px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)"><div style="width:64px;height:64px;border-radius:50%;background:${bg};color:white;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 24px">${icon}</div><h2 style="margin:0 0 12px;font-size:20px;font-weight:600;color:#242424">${title}</h2><p style="margin:0;font-size:14px;color:#616161;line-height:1.5">${detail}</p></div>`;
+      document.body.appendChild(overlay);
+    }, p);
+  } catch { /* cosmetic — ignore */ }
+}
+
+export async function headedLogin(clearCookiesFirst = false): Promise<LoginResult | null> {
   logger.info('Opening browser for interactive login...');
 
   const profileDir = getBrowserProfileDir();
@@ -277,16 +350,22 @@ export async function headedLogin(): Promise<LoginResult | null> {
     context = await launchContext(profileDir, false, channel);
     context.on('close', () => { browserClosed = true; });
 
+    // For force_new: clear browser cookies before importing fresh ones
+    if (clearCookiesFirst) {
+      await context.clearCookies();
+      logger.debug('Browser cookies cleared for force_new login');
+    }
+
     // Import Microsoft SSO cookies from the user's real browser — enables
     // instant silent sign-in without typing credentials (same as msteams-mcp).
     await importMicrosoftCookies(context, channel);
 
     const authenticated = await waitForOwaAuth(context, LOGIN_TIMEOUT_MS);
+    const page = context.pages()[0];
 
     if (!authenticated) {
-      // Login redirect — user needs to sign in manually; wait for them to complete
+      // Login redirect — user needs to sign in manually; wait for them
       logger.info('Waiting for you to complete sign-in in the browser...');
-      const page = context.pages()[0];
       if (page) {
         await page.waitForFunction(
           () => {
@@ -300,8 +379,24 @@ export async function headedLogin(): Promise<LoginResult | null> {
       }
     }
 
+    // Session authenticated — show progress overlay while we save
+    if (page) {
+      await showOverlay(page, 'pending');
+      await page.waitForTimeout(800);
+      await showOverlay(page, 'saving');
+    }
+
     const upn = await extractAndCacheTokens(context);
-    if (!upn) return null;
+    if (!upn) {
+      if (page) await showOverlay(page, 'error');
+      return null;
+    }
+
+    if (page) {
+      await showOverlay(page, 'done');
+      await page.waitForTimeout(1200); // let user read "All done!"
+    }
+
     logger.info(`Headed login succeeded (${upn}). Browser closing.`);
     return { upn, method: 'headed-browser' };
   } catch (err) {
@@ -341,7 +436,7 @@ export interface LoginResult {
 export async function browserLogin(forceNew = false): Promise<LoginResult | null> {
   if (forceNew) {
     clearSession();
-    logger.info('Forced re-login — cleared previous session.');
+    logger.info('Forced re-login — cleared previous session and token cache.');
   }
 
   if (!forceNew && hasSavedBrowserProfile()) {
@@ -352,7 +447,9 @@ export async function browserLogin(forceNew = false): Promise<LoginResult | null
     logger.info('No saved browser profile — opening visible browser for first-time setup...');
   }
 
-  return headedLogin();
+  // Pass clearCookiesFirst=true for force_new so the browser profile's cookies
+  // are wiped before importing fresh SSO cookies (mirrors msteams-mcp forceNewLogin).
+  return headedLogin(forceNew);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

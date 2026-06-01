@@ -12,7 +12,7 @@ import { refreshOwaToken, refreshGraphToken } from './token-refresh.js';
 import { headlessTokenRefresh } from './browser-login.js';
 
 export { browserLogin, headlessTokenRefresh, type LoginResult } from './browser-login.js';
-export { clearSession, hasSessionState, readTokenCache } from './session-store.js';
+export { clearSession, hasSessionState, isSessionLikelyExpired, readTokenCache } from './session-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Access

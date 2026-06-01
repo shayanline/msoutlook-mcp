@@ -4,7 +4,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { browserLogin, getAuthStatus, clearSession, getOwaToken } from '../auth/index.js';
+import { browserLogin, getAuthStatus, clearSession, getOwaToken, hasSessionState, isSessionLikelyExpired } from '../auth/index.js';
 
 /** Minimum minutes remaining before we consider the token "still valid" (skip re-login). */
 const TOKEN_VALID_THRESHOLD_MINUTES = 10;
@@ -121,6 +121,10 @@ export function registerAuthTools(server: McpServer): void {
             graphToken: status.graphTokenExpiry ? {
               expiresAt: status.graphTokenExpiry,
             } : null,
+            session: {
+              exists: hasSessionState(),
+              likelyExpired: isSessionLikelyExpired(),
+            },
           }, null, 2),
         }],
       };
