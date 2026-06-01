@@ -1,5 +1,17 @@
 name: Publish to npm
 
+# Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret required.
+#
+# One-time setup (after the package's first publish exists on npm):
+#   npmjs.com → package → Settings → Trusted Publisher → GitHub Actions
+#     Organization/user: shayanline
+#     Repository:        msoutlook-mcp
+#     Workflow filename: publish.yml
+#
+# npm can only register a trusted publisher for a package that already exists,
+# so the very first version must be published once manually (npm login && npm publish).
+# Every release after that publishes through this workflow with zero secrets.
+
 on:
   release:
     types: [published]
@@ -10,14 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # required for npm provenance
+      id-token: write  # required for OIDC trusted publishing + provenance
 
     steps:
       - uses: actions/checkout@v4
 
+      # Node 24 ships npm >= 11.5.1, the minimum that supports trusted publishing.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
@@ -30,7 +43,7 @@ jobs:
       - name: Build
         run: npm run build
 
+      # No NODE_AUTH_TOKEN: the npm CLI mints a short-lived token from the GitHub
+      # OIDC identity and emits provenance automatically.
       - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
