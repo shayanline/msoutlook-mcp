@@ -311,10 +311,22 @@ function getWindowsDecryptionKey(dataDir: string): Buffer | null {
 // Cookie decryption (platform-aware)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Strip the 32-byte SHA256(host_key) domain-hash prefix that Chrome/Edge v24+
+ * (2024) prepend to the plaintext before encryption. Older cookies have no
+ * prefix, so we only strip when the first 32 bytes actually match the hash.
+ */
+function stripDomainHashPrefix(plaintext: Buffer, hostKey: string): Buffer {
+  if (plaintext.length < 32) return plaintext;
+  const domainHash = crypto.createHash('sha256').update(hostKey).digest();
+  return plaintext.subarray(0, 32).equals(domainHash) ? plaintext.subarray(32) : plaintext;
+}
+
 function decryptCookieValue(
   encryptedValue: Buffer,
   platform: NodeJS.Platform,
   key: Buffer,
+  hostKey: string,
 ): string | null {
   if (encryptedValue.length < 4) return null;
 
@@ -331,6 +343,7 @@ function decryptCookieValue(
   }
 
   try {
+    let plaintext: Buffer;
     if (platform === 'win32') {
       // Windows: AES-256-GCM
       // Layout: v10 (3 bytes) | nonce (12 bytes) | ciphertext | tag (16 bytes)
@@ -343,7 +356,7 @@ function decryptCookieValue(
 
       const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
       decipher.setAuthTag(tag);
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+      plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } else {
       // macOS / Linux: AES-128-CBC
       // Layout: v10/v11 (3 bytes) | ciphertext (rest)
@@ -351,8 +364,11 @@ function decryptCookieValue(
       const iv = Buffer.alloc(16, 0x20); // 16 space characters
       const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
       decipher.setAutoPadding(true);
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+      plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     }
+
+    // Strip the v24+ domain-hash prefix if present, then decode.
+    return stripDomainHashPrefix(plaintext, hostKey).toString('utf8');
   } catch {
     return null;
   }
@@ -388,6 +404,14 @@ export async function importMicrosoftCookies(
   context: BrowserContext,
   channel: string | undefined,
 ): Promise<void> {
+  // Opt-out: users who'd rather sign in once manually (and avoid the one-time
+  // Keychain/keyring prompt) can set this. The persistent profile then
+  // remembers the session for all future logins.
+  if (process.env.MSOUTLOOK_SKIP_COOKIE_IMPORT === 'true') {
+    logger.debug('Cookie import skipped (MSOUTLOOK_SKIP_COOKIE_IMPORT=true)');
+    return;
+  }
+
   const platform = process.platform;
 
   const configs = getBrowserConfigs();
@@ -433,32 +457,62 @@ export async function importMicrosoftCookies(
     return;
   }
 
+  const nowSec = Math.floor(Date.now() / 1000);
+
   const playwrightCookies = rawCookies
     .map(c => {
-      const value = decryptCookieValue(c.encrypted_value, platform, decryptionKey!);
+      const value = decryptCookieValue(c.encrypted_value, platform, decryptionKey!, c.host_key);
       if (!value) return null;
+
+      const expires = chromeEpochToUnix(c.expires_utc);
+      if (expires <= nowSec) return null; // skip already-expired cookies
+
+      const secure = c.is_secure === 1;
+      let sameSite = sameSiteLabel(c.samesite);
+      // Chromium rejects SameSite=None cookies that are not Secure ("Invalid cookie fields").
+      // Downgrade those to Lax so the batch is always accepted.
+      if (sameSite === 'None' && !secure) sameSite = 'Lax';
+
       return {
         name: c.name,
         value,
-        domain: c.host_key.startsWith('.') ? c.host_key : `.${c.host_key}`,
+        domain: c.host_key, // raw host_key, as Chrome stores it (matches msteams-mcp)
         path: c.path || '/',
-        expires: chromeEpochToUnix(c.expires_utc),
-        secure: c.is_secure === 1,
+        expires,
+        secure,
         httpOnly: c.is_httponly === 1,
-        sameSite: sameSiteLabel(c.samesite) as 'Strict' | 'Lax' | 'None',
+        sameSite,
       };
     })
     .filter((c): c is NonNullable<typeof c> => c !== null);
 
   if (playwrightCookies.length === 0) {
-    logger.debug(`All ${config.label} cookies failed to decrypt (App-Bound Encryption on Windows Chrome 127+ affects Chrome cookies; Edge is unaffected)`);
+    logger.debug(`No valid ${config.label} cookies to import (decryption failed or all expired)`);
     return;
   }
 
+  // Try the whole batch first (fast path). If Playwright rejects it because a
+  // single cookie has invalid fields, fall back to adding them one at a time so
+  // one bad cookie can't block the rest.
   try {
     await context.addCookies(playwrightCookies);
     logger.info(`Imported ${playwrightCookies.length} Microsoft SSO cookies from ${config.label} (${platform}) — browser will sign in automatically`);
-  } catch (err) {
-    logger.debug('Cookie injection failed', err instanceof Error ? err.message : String(err));
+    return;
+  } catch {
+    logger.debug('Batch cookie inject failed — retrying individually');
+  }
+
+  let imported = 0;
+  for (const cookie of playwrightCookies) {
+    try {
+      await context.addCookies([cookie]);
+      imported++;
+    } catch { /* skip the offending cookie */ }
+  }
+
+  if (imported > 0) {
+    logger.info(`Imported ${imported}/${playwrightCookies.length} Microsoft SSO cookies from ${config.label} (${platform})`);
+  } else {
+    logger.debug('Cookie injection failed for all cookies');
   }
 }

@@ -37,6 +37,19 @@ const LOGIN_DOMAINS = [
 ];
 
 /**
+ * Predicate evaluated INSIDE the browser. Returns true once an OWA-scoped MSAL
+ * access token is present in localStorage. This is the real signal that auth
+ * has completed — we deliberately do NOT check the `olk-isauthed` flag, whose
+ * value is "1" (not "true") and varies, while this token check is what the
+ * token extractor itself relies on.
+ */
+function owaAccessTokenPresent(): boolean {
+  return Object.keys(localStorage).some(
+    k => k.includes('accesstoken') && k.includes('outlook.office.com'),
+  );
+}
+
+/**
  * Determine the Playwright channel to use.
  *
  * Priority:
@@ -213,16 +226,8 @@ async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promi
     }
     if (redirectedToLogin) return false;
 
-    // No login redirect — session appears valid. Now wait for MSAL tokens.
-    await page.waitForFunction(
-      () => {
-        if (localStorage.getItem('olk-isauthed') !== 'true') return false;
-        return Object.keys(localStorage).some(
-          k => k.includes('|accesstoken|') && k.includes('outlook.office.com'),
-        );
-      },
-      { timeout: timeoutMs },
-    );
+    // No login redirect — session appears valid. Now wait for the MSAL token.
+    await page.waitForFunction(owaAccessTokenPresent, { timeout: timeoutMs });
     return true;
   } finally {
     page.off('framenavigated', onNavigation);
@@ -254,12 +259,7 @@ async function waitForMsalTokens(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const ready = await page.evaluate(() => {
-      if (localStorage.getItem('olk-isauthed') !== 'true') return false;
-      return Object.keys(localStorage).some(
-        k => k.includes('|accesstoken|') && k.includes('outlook.office.com'),
-      );
-    }).catch(() => false);
+    const ready = await page.evaluate(owaAccessTokenPresent).catch(() => false);
 
     if (ready) {
       logger.debug(`MSAL tokens appeared after ${Math.round((Date.now() - (deadline - timeoutMs)) / 1000)}s`);
@@ -367,15 +367,7 @@ export async function headedLogin(clearCookiesFirst = false): Promise<LoginResul
       // Login redirect — user needs to sign in manually; wait for them
       logger.info('Waiting for you to complete sign-in in the browser...');
       if (page) {
-        await page.waitForFunction(
-          () => {
-            if (localStorage.getItem('olk-isauthed') !== 'true') return false;
-            return Object.keys(localStorage).some(
-              k => k.includes('|accesstoken|') && k.includes('outlook.office.com'),
-            );
-          },
-          { timeout: LOGIN_TIMEOUT_MS },
-        );
+        await page.waitForFunction(owaAccessTokenPresent, { timeout: LOGIN_TIMEOUT_MS });
       }
     }
 
