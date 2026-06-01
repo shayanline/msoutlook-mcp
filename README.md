@@ -61,7 +61,7 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_list_emails` | List emails from any folder (Inbox by default) |
 | `outlook_get_email` | Read full email content by ID |
 | `outlook_get_unread` | Get unread emails from Inbox |
-| `outlook_search_emails` | Search emails by keyword, with optional received date range and pagination |
+| `outlook_search_emails` | Search emails by keyword, with optional received date range and pagination. Omit the keyword to list everything in a date range |
 | `outlook_send_email` | Send an email |
 | `outlook_create_draft` | Create a draft without sending |
 | `outlook_send_draft` | Send a previously created draft |
@@ -71,6 +71,7 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_flag` | Flag or unflag an email |
 | `outlook_move_email` | Move email to a different folder |
 | `outlook_delete_email` | Delete an email |
+| `outlook_batch` | Run one bulk action (mark read, mark unread, flag, unflag, move, delete) over many emails at once |
 | `outlook_list_folders` | List all mail folders with unread counts |
 
 ### Calendar

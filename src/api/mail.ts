@@ -225,7 +225,8 @@ export async function deleteMessage(id: string): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SearchMessagesOptions {
-  query: string;
+  /** Keyword query. Optional: omit it to list everything in a date range. */
+  query?: string;
   top?: number;
   folder?: string;
   /** Inclusive lower bound on received date (ISO date or datetime). */
@@ -258,9 +259,15 @@ function toKqlDate(value: string): string {
 export async function searchMessages(opts: SearchMessagesOptions): Promise<SearchMessagesResult> {
   const folder = opts.folder ?? 'Inbox';
 
-  let kql = opts.query.trim();
-  if (opts.startDate) kql += ` AND received>=${toKqlDate(opts.startDate)}`;
-  if (opts.endDate) kql += ` AND received<=${toKqlDate(opts.endDate)}`;
+  const parts: string[] = [];
+  const keyword = opts.query?.trim();
+  if (keyword) parts.push(keyword);
+  if (opts.startDate) parts.push(`received>=${toKqlDate(opts.startDate)}`);
+  if (opts.endDate) parts.push(`received<=${toKqlDate(opts.endDate)}`);
+  if (parts.length === 0) {
+    throw new Error('searchMessages needs a query and/or a date range (startDate or endDate).');
+  }
+  const kql = parts.join(' AND ');
 
   const params: Record<string, string> = {
     '$search': `"${kql}"`,

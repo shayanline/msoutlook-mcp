@@ -59,6 +59,28 @@ function formatMessageList(messages: Message[]): string {
   return messages.map((m, i) => `--- Message ${i + 1} ---\n${formatMessage(m)}`).join('\n\n');
 }
 
+/**
+ * Run an async operation over many IDs in capped concurrent chunks.
+ * One failure never aborts the rest: every result is captured.
+ */
+async function runBatch(
+  ids: string[],
+  op: (id: string) => Promise<unknown>,
+  concurrency = 8,
+): Promise<{ succeeded: number; failed: Array<{ id: string; error: string }> }> {
+  let succeeded = 0;
+  const failed: Array<{ id: string; error: string }> = [];
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const chunk = ids.slice(i, i + concurrency);
+    const results = await Promise.allSettled(chunk.map(op));
+    results.forEach((r, j) => {
+      if (r.status === 'fulfilled') succeeded += 1;
+      else failed.push({ id: chunk[j], error: r.reason instanceof Error ? r.reason.message : String(r.reason) });
+    });
+  }
+  return { succeeded, failed };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tools
 // ─────────────────────────────────────────────────────────────────────────────
@@ -278,12 +300,44 @@ export function registerMailTools(server: McpServer): void {
     },
   );
 
+  // ── outlook_batch ────────────────────────────────────────────────────────
+  server.tool(
+    'outlook_batch',
+    'Run one bulk action on many emails at once. Far faster than calling the single item tools repeatedly. Returns a per id success and failure summary.',
+    {
+      action: z.enum(['mark_read', 'mark_unread', 'delete', 'flag', 'unflag', 'move'])
+        .describe('Action to apply to every ID. "move" requires destination_folder.'),
+      ids: z.array(z.string()).min(1).max(200).describe('Message IDs to act on (1 to 200)'),
+      destination_folder: z.string().optional().describe('Required when action is "move": folder name or ID (e.g. Archive, DeletedItems, or a folder ID)'),
+    },
+    async ({ action, ids, destination_folder }) => {
+      if (action === 'move' && !destination_folder) {
+        return { content: [{ type: 'text', text: 'destination_folder is required when action is "move".' }] };
+      }
+
+      const opFor = (id: string): Promise<unknown> => {
+        switch (action) {
+          case 'mark_read': return markMessageRead(id, true);
+          case 'mark_unread': return markMessageRead(id, false);
+          case 'delete': return deleteMessage(id);
+          case 'flag': return flagMessage(id, 'Flagged');
+          case 'unflag': return flagMessage(id, 'NotFlagged');
+          case 'move': return moveMessage(id, destination_folder!);
+        }
+      };
+
+      const { succeeded, failed } = await runBatch(ids, opFor);
+      const summary = { action, total: ids.length, succeeded, failed: failed.length, failures: failed };
+      return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
+    },
+  );
+
   // ── outlook_search_emails ────────────────────────────────────────────────
   server.tool(
     'outlook_search_emails',
-    'Search emails by keyword across subject and body, with optional received date range and pagination.',
+    'Search emails by keyword across subject and body, with optional received date range and pagination. Omit query to list everything in a date range.',
     {
-      query: z.string().describe('Search query (keywords, sender name, subject, etc.)'),
+      query: z.string().optional().describe('Search query (keywords, sender name, subject, etc.). Optional: leave empty to list everything that matches the date range.'),
       top: z.number().int().min(1).max(50).optional().describe('Page size (default 20, max 50)'),
       start_date: z.string().optional().describe('Only emails received on or after this date. ISO date (YYYY-MM-DD) or datetime.'),
       end_date: z.string().optional().describe('Only emails received on or before this date. ISO date (YYYY-MM-DD) or datetime.'),
@@ -316,7 +370,7 @@ export function registerMailTools(server: McpServer): void {
     async () => {
       const folders = await listFolders();
       const text = folders
-        .map(f => `${f.DisplayName} (ID: ${f.Id}) — Unread: ${f.UnreadItemCount} / ${f.TotalItemCount}`)
+        .map(f => `${f.DisplayName} (ID: ${f.Id}) | Unread: ${f.UnreadItemCount} / ${f.TotalItemCount}`)
         .join('\n');
       return { content: [{ type: 'text', text: text || 'No folders found.' }] };
     },
