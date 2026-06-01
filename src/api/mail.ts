@@ -79,7 +79,6 @@ export async function listMessages(opts: ListMessagesOptions = {}): Promise<Mess
   const folder = opts.folder ?? 'Inbox';
   const params: Record<string, string> = {
     '$top': String(opts.top ?? 20),
-    '$orderby': opts.orderBy ?? 'ReceivedDateTime desc',
     '$select': (opts.select ?? [
       'Id', 'Subject', 'BodyPreview', 'From', 'ToRecipients', 'ReceivedDateTime',
       'IsRead', 'HasAttachments', 'Importance', 'Flag', 'ConversationId', 'WebLink',
@@ -87,8 +86,16 @@ export async function listMessages(opts: ListMessagesOptions = {}): Promise<Mess
   };
 
   if (opts.skip) params['$skip'] = String(opts.skip);
-  if (opts.filter) params['$filter'] = opts.filter;
-  if (opts.search) params['$search'] = `"${opts.search}"`;
+
+  // $search cannot be combined with $orderby or $filter — the API returns
+  // 400 SearchWithOrderBy. Search results are relevance-ranked, so we drop
+  // ordering when searching.
+  if (opts.search) {
+    params['$search'] = `"${opts.search}"`;
+  } else {
+    params['$orderby'] = opts.orderBy ?? 'ReceivedDateTime desc';
+    if (opts.filter) params['$filter'] = opts.filter;
+  }
 
   const res = await owaGet<ODataResponse<Message>>(`/MailFolders/${folder}/messages`, params);
   return res.value;

@@ -13,7 +13,7 @@ import { searchPeople, type Person } from '../api/people.js';
 
 function formatContact(c: Contact): string {
   const emails = c.EmailAddresses?.map(e => e.Address).join(', ') ?? '';
-  const phones = [...(c.BusinessPhones ?? []), c.MobilePhone].filter(Boolean).join(', ');
+  const phones = [...(c.BusinessPhones ?? []), c.MobilePhone1].filter(Boolean).join(', ');
   return [
     `ID: ${c.Id}`,
     `Name: ${c.DisplayName}`,

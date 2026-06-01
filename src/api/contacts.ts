@@ -16,7 +16,7 @@ export interface Contact {
   Surname?: string;
   EmailAddresses?: Array<{ Name?: string; Address: string }>;
   BusinessPhones?: string[];
-  MobilePhone?: string;
+  MobilePhone1?: string;
   JobTitle?: string;
   CompanyName?: string;
   Department?: string;
@@ -38,11 +38,16 @@ export interface Contact {
 export async function listContacts(search?: string, top = 25): Promise<Contact[]> {
   const params: Record<string, string> = {
     '$top': String(top),
-    '$orderby': 'displayName asc',
-    '$select': 'Id,DisplayName,GivenName,Surname,EmailAddresses,BusinessPhones,MobilePhone,JobTitle,CompanyName',
+    '$select': 'Id,DisplayName,GivenName,Surname,EmailAddresses,BusinessPhones,MobilePhone1,JobTitle,CompanyName',
   };
 
-  if (search) params['$search'] = `"${search}"`;
+  // $search cannot be combined with $orderby (400 SearchWithOrderBy).
+  // Search results are relevance-ranked; only order when not searching.
+  if (search) {
+    params['$search'] = `"${search}"`;
+  } else {
+    params['$orderby'] = 'displayName asc';
+  }
 
   const res = await owaGet<ODataResponse<Contact>>('/contacts', params);
   return res.value;
@@ -81,7 +86,7 @@ export async function createContact(opts: CreateContactOptions): Promise<Contact
     DisplayName: opts.displayName ?? `${opts.givenName ?? ''} ${opts.surname ?? ''}`.trim(),
     ...(emailAddresses ? { EmailAddresses: emailAddresses } : {}),
     ...(opts.businessPhone ? { BusinessPhones: [opts.businessPhone] } : {}),
-    MobilePhone: opts.mobilePhone,
+    MobilePhone1: opts.mobilePhone,
     JobTitle: opts.jobTitle,
     CompanyName: opts.companyName,
     PersonalNotes: opts.notes,
