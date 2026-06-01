@@ -102,8 +102,19 @@ Tokens are refreshed automatically:
 ## Requirements
 
 - Node.js 20+
-- Microsoft Edge (for login browser) — or Chromium as fallback
+- A Chromium-based browser: Edge or Chrome (auto-detected from system default)
 - A Microsoft 365 work/school account or personal Microsoft account
+
+## Platform support
+
+| Feature | macOS | Linux | Windows |
+|---------|-------|-------|---------|
+| Browser auto-detection | System default (Edge/Chrome) | Chrome fallback | Edge (pre-installed) |
+| SSO cookie import | ✅ Chrome + Edge via Keychain | ✅ Chrome + Edge via libsecret / `"peanuts"` fallback | ✅ Edge via DPAPI (PowerShell) |
+| Windows Chrome 127+ cookies | — | — | ⚠️ App-Bound Encryption — not supported. Use Edge instead. |
+| Headed browser fallback | ✅ | ✅ | ✅ |
+
+Cookie import is a best-effort optimisation. If it cannot run (e.g. no matching browser installed, Keychain denied), the MCP falls back to opening a headed browser where you sign in once manually — the session then persists.
 
 ## Security notes
 
@@ -117,4 +128,6 @@ Tokens are refreshed automatically:
 | Variable | Description |
 |----------|-------------|
 | `MSOUTLOOK_DEBUG=true` | Enable debug logging to stderr |
-| `MSOUTLOOK_BROWSER=chrome` | Force a specific browser: `chrome`, `msedge`, or `chromium` (bundled). Auto-detects if unset — tries Chrome first, then Edge, then bundled Chromium. |
+| `MSOUTLOOK_BROWSER=chrome` | Force a specific browser: `chrome` or `msedge`. If unset, uses the macOS system default browser; falls back to Chrome on macOS/Linux and Edge on Windows. |
+| `MSOUTLOOK_CHROME_PROFILE` | Pin a specific Chrome profile dir for cookie import (e.g. `Profile 1`). Defaults to `Default`. |
+| `MSOUTLOOK_EDGE_PROFILE` | Pin a specific Edge profile dir for cookie import (e.g. `Profile 1`). Defaults to `Default`. |
