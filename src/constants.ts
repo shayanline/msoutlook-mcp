@@ -65,3 +65,20 @@ export const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 export const OWA_CLIENT_VERSION = '20260522011.06';
 export const OWA_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Ordered list of Playwright channel names to try when auto-detecting a browser.
+ * undefined = Playwright's bundled Chromium (always available as final fallback).
+ *
+ * Override with MSOUTLOOK_BROWSER env var (e.g. "chrome", "msedge", "chromium").
+ */
+export const BROWSER_CHANNELS: Array<string | undefined> = (() => {
+  const override = process.env.MSOUTLOOK_BROWSER?.trim().toLowerCase();
+  if (override === 'chromium' || override === 'bundled') return [undefined];
+  if (override) return [override, undefined];
+  return ['chrome', 'msedge', undefined];
+})();

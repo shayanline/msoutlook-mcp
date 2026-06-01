@@ -117,3 +117,4 @@ Tokens are refreshed automatically:
 | Variable | Description |
 |----------|-------------|
 | `MSOUTLOOK_DEBUG=true` | Enable debug logging to stderr |
+| `MSOUTLOOK_BROWSER=chrome` | Force a specific browser: `chrome`, `msedge`, or `chromium` (bundled). Auto-detects if unset — tries Chrome first, then Edge, then bundled Chromium. |

@@ -12,7 +12,7 @@
 import { chromium, type BrowserContext } from 'playwright';
 import { existsSync, readdirSync } from 'node:fs';
 import { logger } from '../utils/logger.js';
-import { OWA_URL, LOGIN_TIMEOUT_MS } from '../constants.js';
+import { OWA_URL, LOGIN_TIMEOUT_MS, BROWSER_CHANNELS } from '../constants.js';
 import {
   getBrowserProfileDir,
   writeSessionState,
@@ -32,6 +32,35 @@ import { extractTokensFromLocalStorage, getOwaLocalStorage } from './token-extra
 function hasSavedBrowserProfile(): boolean {
   const dir = getBrowserProfileDir();
   return existsSync(dir) && readdirSync(dir).length > 0;
+}
+
+/** Cached result of browser detection so we only probe once per process. */
+let detectedChannel: string | undefined | null = null; // null = not yet detected
+
+/**
+ * Detect the best available Chromium-based browser on this machine.
+ * Tries each channel in BROWSER_CHANNELS order; the first one that launches
+ * successfully wins. Falls back to Playwright's bundled Chromium (undefined).
+ */
+async function detectBrowserChannel(): Promise<string | undefined> {
+  if (detectedChannel !== null) return detectedChannel;
+
+  for (const channel of BROWSER_CHANNELS) {
+    try {
+      const browser = await chromium.launch({ channel, headless: true });
+      await browser.close();
+      const label = channel ?? 'bundled Chromium';
+      logger.info(`Using browser: ${label}`);
+      detectedChannel = channel;
+      return channel;
+    } catch {
+      continue;
+    }
+  }
+
+  // Should never reach here — bundled Chromium (undefined) always works
+  detectedChannel = undefined;
+  return undefined;
 }
 
 /** Wait for OWA to report itself as authenticated. */
@@ -97,9 +126,10 @@ export async function headlessLogin(): Promise<string | null> {
   let context: BrowserContext | null = null;
 
   try {
+    const channel = await detectBrowserChannel();
     context = await chromium.launchPersistentContext(profileDir, {
       headless: true,
-      channel: 'msedge',
+      channel,
     });
 
     // 10 s is plenty — if the saved session is valid it loads in 2–4 s.
@@ -137,9 +167,10 @@ export async function headedLogin(): Promise<string | null> {
   let browserClosed = false;
 
   try {
+    const channel = await detectBrowserChannel();
     context = await chromium.launchPersistentContext(profileDir, {
       headless: false,
-      channel: 'msedge',
+      channel,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
     });
 
