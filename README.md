@@ -1,8 +1,22 @@
 # msoutlook-mcp
 
+[![npm version](https://img.shields.io/npm/v/msoutlook-mcp.svg)](https://www.npmjs.com/package/msoutlook-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/msoutlook-mcp.svg)](https://www.npmjs.com/package/msoutlook-mcp)
+[![node](https://img.shields.io/node/v/msoutlook-mcp.svg)](https://www.npmjs.com/package/msoutlook-mcp)
+[![license](https://img.shields.io/npm/l/msoutlook-mcp.svg)](./LICENSE)
+
 MCP server for Microsoft Outlook Web. No app registration required.
 
-Uses your existing Outlook Web session (the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) uses the Teams web session). Opens a browser once for login, then caches tokens and refreshes them automatically.
+Give any MCP client (Claude, Cursor, Devin, ...) read and write access to your Outlook mail, calendar, and contacts. It works by reusing your existing Outlook Web session, the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) reuses the Teams web session: you sign in once in a browser, then tokens are cached and refreshed automatically.
+
+## Why
+
+Most Outlook MCP servers make you register an Azure AD application, grant admin consent, and manage client secrets. This one needs none of that. It uses Outlook Web's own first-party client ID, so your access is exactly what your account already has, and nothing is exposed beyond your own machine.
+
+- No Azure app registration, admin consent, or client secrets
+- Cross-platform (macOS, Linux, Windows) with automatic browser detection
+- Tokens encrypted at rest; refreshed silently in the background
+- 30 tools across mail, calendar, contacts, and people
 
 ## How it works
 
@@ -28,7 +42,7 @@ No Azure app registration. No admin consent. No client secrets. Your access is l
 }
 ```
 
-Then run `outlook_login` from your MCP client to open the browser and authenticate.
+Then run `outlook_login` from your MCP client. On first use a browser opens so you can sign in; after that, logins are silent and no browser appears. Do not close the window manually, it closes itself once you are signed in.
 
 ## Tools
 
@@ -132,3 +146,17 @@ Cookie import is a best-effort optimisation. If it cannot run (e.g. no matching 
 | `MSOUTLOOK_CHROME_PROFILE` | Pin a specific Chrome profile dir for cookie import (e.g. `Profile 1`). Defaults to `Default`. |
 | `MSOUTLOOK_EDGE_PROFILE` | Pin a specific Edge profile dir for cookie import (e.g. `Profile 1`). Defaults to `Default`. |
 | `MSOUTLOOK_SKIP_COOKIE_IMPORT=true` | Skip importing SSO cookies from your real browser (avoids the one-time Keychain/keyring prompt). You'll sign in once manually in the browser; the persistent profile then remembers the session. |
+
+## Troubleshooting
+
+**A macOS Keychain prompt appears on first login.** That is the cookie import reading your browser's session. Click "Always Allow" once and it never prompts again. If you would rather not grant it, set `MSOUTLOOK_SKIP_COOKIE_IMPORT=true` and sign in manually the first time instead.
+
+**Login says it failed but the browser showed my inbox.** Run `outlook_login` again and let the window close on its own. If it persists, run with `MSOUTLOOK_DEBUG=true` and check the stderr logs.
+
+**It opens the wrong browser.** Set `MSOUTLOOK_BROWSER=chrome` or `MSOUTLOOK_BROWSER=msedge` to force one. Only Chromium-based browsers (Chrome, Edge) are supported; Safari and Firefox fall back to Chrome/Edge.
+
+**Tokens stopped working after a long break.** Refresh tokens last around 90 days. Run `outlook_login` to re-authenticate.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
