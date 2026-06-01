@@ -99,10 +99,7 @@ export async function listMessages(opts: ListMessagesOptions = {}): Promise<Mess
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getMessage(id: string, includeAttachments = false): Promise<Message> {
-  const params: Record<string, string> = {
-    '$expand': includeAttachments ? 'Attachments' : '',
-  };
-  if (!includeAttachments) delete params['$expand'];
+  const params = includeAttachments ? { '$expand': 'Attachments' } : undefined;
   return owaGet<Message>(`/messages/${id}`, params);
 }
 

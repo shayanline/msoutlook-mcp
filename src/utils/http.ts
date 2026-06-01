@@ -14,15 +14,11 @@ export function getBearerHeaders(token: string, origin = OWA_BASE): Record<strin
   };
 }
 
-export function getOwaServiceHeaders(token: string, action: string): Record<string, string> {
-  return {
-    ...getBearerHeaders(token),
-    'Action': action,
-    'X-OWA-UrlPostData': encodeURIComponent(JSON.stringify({ __type: 'JsonRequestEnvelope:#Exchange' })),
-  };
-}
-
-/** Parse a fetch Response, throwing on non-2xx. */
+/**
+ * Parse a fetch Response, throwing on non-2xx.
+ * JSON bodies are parsed; empty/non-JSON bodies (e.g. 202/204 from sendmail)
+ * resolve to undefined.
+ */
 export async function parseResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -32,7 +28,7 @@ export async function parseResponse<T>(res: Response): Promise<T> {
   if (ct.includes('application/json')) {
     return res.json() as Promise<T>;
   }
-  return res.text() as unknown as Promise<T>;
+  return undefined as T;
 }
 
 /** Sleep for ms milliseconds. */

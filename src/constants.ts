@@ -13,11 +13,8 @@
  */
 export const OWA_CLIENT_ID = '9199bf20-a13f-4107-85dc-02114787ef48';
 
-/** OAuth token endpoint for work/school accounts. */
+/** OAuth token endpoint for work/school accounts (used as default when no tenant ID). */
 export const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/organizations/oauth2/v2.0/token';
-
-/** OAuth token endpoint for personal Microsoft accounts. */
-export const TOKEN_ENDPOINT_CONSUMERS = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
 
 /** Primary resource scope for Outlook Web. */
 export const OWA_SCOPE = 'https://outlook.office.com/.default';
@@ -33,20 +30,8 @@ export const OWA_URL = 'https://outlook.office.com/mail/';
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const OWA_BASE = 'https://outlook.office.com';
-export const OWA_SVC = `${OWA_BASE}/owa/service.svc`;
 export const OWA_REST_V2 = `${OWA_BASE}/api/v2.0`;
-export const OWA_SEARCH = `${OWA_BASE}/search/api/v1`;
-export const OWA_PEOPLE = `${OWA_BASE}/PeopleGraphVx/v1.0`;
 export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Session Storage
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const SESSION_DIR_NAME = '.msoutlook-mcp-server';
-export const SESSION_STATE_FILE = 'session-state.json';
-export const TOKEN_CACHE_FILE = 'token-cache.json';
-export const BROWSER_PROFILE_DIR = 'browser-profile';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token / Refresh
@@ -59,11 +44,9 @@ export const TOKEN_REFRESH_BUFFER_MS = 55 * 60 * 1000;
 export const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OWA App version header (spoofs the OWA web client)
+// HTTP
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const OWA_CLIENT_VERSION = '20260522011.06';
+/** User-Agent presented to OWA APIs so requests look like the web client. */
 export const OWA_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0';
-
-

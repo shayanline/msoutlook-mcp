@@ -10,7 +10,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { OWA_CLIENT_ID, OWA_SCOPE, GRAPH_SCOPE } from '../constants.js';
+import { OWA_CLIENT_ID } from '../constants.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -160,24 +160,20 @@ export function extractTokensFromLocalStorage(
   };
 }
 
-/**
- * Extract OWA origin (always outlook.office.com) from session state.
- */
-export function extractOwaOriginFromState(
-  state: Record<string, unknown>,
-): string | null {
-  const origins = state.origins as Array<{ origin: string; localStorage: unknown[] }> | undefined;
-  const owaOrigin = origins?.find(o => o.origin.includes('outlook.office.com'));
-  return owaOrigin?.origin ?? null;
+/** Shape of the relevant parts of a Playwright storageState. */
+export interface StorageState {
+  origins?: Array<{
+    origin: string;
+    localStorage: Array<{ name: string; value: string }>;
+  }>;
 }
 
 /**
- * Get the localStorage array from a Playwright storageState for OWA.
+ * Get the localStorage array from a Playwright storageState for the OWA origin.
  */
 export function getOwaLocalStorage(
-  state: Record<string, unknown>,
+  state: StorageState,
 ): Array<{ name: string; value: string }> | null {
-  const origins = state.origins as Array<{ origin: string; localStorage: Array<{ name: string; value: string }> }> | undefined;
-  const owaOrigin = origins?.find(o => o.origin.includes('outlook.office.com'));
+  const owaOrigin = state.origins?.find(o => o.origin.includes('outlook.office.com'));
   return owaOrigin?.localStorage ?? null;
 }

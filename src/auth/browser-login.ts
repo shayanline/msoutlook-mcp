@@ -128,7 +128,7 @@ async function extractAndCacheTokens(context: BrowserContext): Promise<string | 
   const state = await context.storageState();
   writeSessionState(state);
 
-  const ls = getOwaLocalStorage(state as unknown as Record<string, unknown>);
+  const ls = getOwaLocalStorage(state);
   if (!ls) {
     logger.debug('Could not find Outlook origin in session state');
     return null;
@@ -304,8 +304,8 @@ export async function headlessLogin(): Promise<LoginResult | null> {
     if (!upn) return null;
     logger.info(`Headless login succeeded (${upn})`);
     return { upn, method: 'headless-sso' };
-  } catch {
-    logger.debug('Headless login failed');
+  } catch (err) {
+    logger.debug('Headless login failed', err instanceof Error ? err.message : String(err));
     return null;
   } finally {
     await context?.close().catch(() => {});

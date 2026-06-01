@@ -13,13 +13,15 @@
 
 import { logger } from '../utils/logger.js';
 import { OWA_CLIENT_ID, OWA_SCOPE, GRAPH_SCOPE, OWA_BASE } from '../constants.js';
-import { readTokenCache, writeTokenCache, clearTokenCache, type TokenCache } from './session-store.js';
+import { readTokenCache, writeTokenCache, type TokenCache } from './session-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Concurrent refresh guard (mirrors msteams-mcp)
+// Concurrent refresh guards — separate per resource so an OWA refresh doesn't
+// block a Graph refresh (mirrors msteams-mcp's guard, split by scope).
 // ─────────────────────────────────────────────────────────────────────────────
 
-let refreshInProgress = false;
+let owaRefreshInProgress = false;
+let graphRefreshInProgress = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core HTTP call
@@ -69,7 +71,7 @@ async function callTokenEndpoint(
       return null;
     }
 
-    return res.json() as Promise<TokenResponse>;
+    return await res.json() as TokenResponse;
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       logger.warn('Token refresh request timed out');
@@ -92,8 +94,8 @@ async function callTokenEndpoint(
  * Prevents concurrent refresh races with module-level guard.
  */
 export async function refreshOwaToken(): Promise<string | null> {
-  if (refreshInProgress) {
-    logger.debug('Token refresh already in progress — waiting is not needed, caller should retry');
+  if (owaRefreshInProgress) {
+    logger.debug('OWA token refresh already in progress');
     return null;
   }
 
@@ -103,7 +105,7 @@ export async function refreshOwaToken(): Promise<string | null> {
     return null;
   }
 
-  refreshInProgress = true;
+  owaRefreshInProgress = true;
   try {
     logger.debug('Refreshing OWA access token via HTTP');
     const response = await callTokenEndpoint(cache.tenantId, cache.refreshToken, OWA_SCOPE);
@@ -120,7 +122,7 @@ export async function refreshOwaToken(): Promise<string | null> {
     logger.info('OWA token refreshed successfully');
     return response.access_token;
   } finally {
-    refreshInProgress = false;
+    owaRefreshInProgress = false;
   }
 }
 
@@ -128,12 +130,12 @@ export async function refreshOwaToken(): Promise<string | null> {
  * Refresh the Graph access token via HTTP.
  */
 export async function refreshGraphToken(): Promise<string | null> {
-  if (refreshInProgress) return null;
+  if (graphRefreshInProgress) return null;
 
   const cache = readTokenCache();
   if (!cache?.refreshToken || !cache.tenantId) return null;
 
-  refreshInProgress = true;
+  graphRefreshInProgress = true;
   try {
     logger.debug('Refreshing Graph access token via HTTP');
     const response = await callTokenEndpoint(cache.tenantId, cache.refreshToken, GRAPH_SCOPE);
@@ -150,6 +152,6 @@ export async function refreshGraphToken(): Promise<string | null> {
     logger.info('Graph token refreshed successfully');
     return response.access_token;
   } finally {
-    refreshInProgress = false;
+    graphRefreshInProgress = false;
   }
 }

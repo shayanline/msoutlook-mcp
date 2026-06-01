@@ -2,7 +2,7 @@
  * Contacts API.
  */
 
-import { owaGet, owaPost, owaPatch, owaDelete } from './client.js';
+import { owaGet, owaPost, owaDelete } from './client.js';
 import type { ODataResponse } from './mail.js';
 
 // ─────────────────────────────────────────────────────────────────────────────

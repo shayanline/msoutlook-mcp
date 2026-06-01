@@ -333,7 +333,9 @@ function decryptCookieValue(
   try {
     if (platform === 'win32') {
       // Windows: AES-256-GCM
-      // Layout: v10 (3 bytes) | nonce (12 bytes) | ciphertext+tag (rest)
+      // Layout: v10 (3 bytes) | nonce (12 bytes) | ciphertext | tag (16 bytes)
+      // Minimum valid length = 3 + 12 + 16 = 31 bytes
+      if (encryptedValue.length < 31) return null;
       const nonce = encryptedValue.subarray(3, 15);
       const ciphertextWithTag = encryptedValue.subarray(15);
       const tag = ciphertextWithTag.subarray(-16);
