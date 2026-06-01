@@ -63,18 +63,26 @@ async function detectBrowserChannel(): Promise<string | undefined> {
   return undefined;
 }
 
-/** Wait for OWA to report itself as authenticated. */
+/** Wait for OWA to fully authenticate AND for MSAL to populate tokens in localStorage. */
 async function waitForOwaAuth(context: BrowserContext, timeoutMs: number): Promise<void> {
   const page = context.pages()[0] ?? await context.newPage();
   await page.goto(OWA_URL, { waitUntil: 'domcontentloaded' });
 
-  await Promise.race([
-    page.waitForFunction(
-      () => localStorage.getItem('olk-isauthed') === 'true',
-      { timeout: timeoutMs },
-    ),
-    page.waitForURL('**/mail/**', { timeout: timeoutMs }),
-  ]);
+  // Two conditions must both be true before we proceed:
+  // 1. OWA sets olk-isauthed once the app shell is ready
+  // 2. At least one OWA-scoped MSAL access token is present in localStorage
+  //
+  // Checking for the token directly avoids the race condition where the URL or
+  // olk-isauthed flag is set but MSAL hasn't finished its silent token acquisition.
+  await page.waitForFunction(
+    () => {
+      if (localStorage.getItem('olk-isauthed') !== 'true') return false;
+      return Object.keys(localStorage).some(
+        k => k.includes('|accesstoken|') && k.includes('outlook.office.com'),
+      );
+    },
+    { timeout: timeoutMs },
+  );
 }
 
 /** Extract MSAL tokens from the live browser context and write to cache. */
