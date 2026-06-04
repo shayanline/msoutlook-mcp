@@ -7,16 +7,19 @@
 
 MCP server for Microsoft Outlook Web. No app registration required.
 
-Give any MCP client (Claude, Cursor, Devin, ...) read and write access to your Outlook mail, calendar, and contacts. It works by reusing your existing Outlook Web session, the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) reuses the Teams web session: you sign in once in a browser, then tokens are cached and refreshed automatically.
+Give any MCP client (Claude, Cursor, Devin, ...) read and write access to your Outlook mail, calendar, contacts, and the org directory. It works by reusing your existing Outlook Web session, the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) reuses the Teams web session: you sign in once in a browser, then tokens are cached and refreshed automatically.
 
 ## Why
 
-Most Outlook MCP servers make you register an Azure AD application, grant admin consent, and manage client secrets. This one needs none of that. It uses Outlook Web's own first party client ID, so your access is exactly what your account already has, and nothing is exposed beyond your own machine.
+Most Outlook MCP servers make you register an Azure AD application, grant admin consent, and manage client secrets. This one needs none of that. It reuses Outlook Web's own first party client ID, so your access is exactly what your account already has, and nothing leaves your own machine.
 
-- No Azure app registration, admin consent, or client secrets
-- Cross platform (macOS, Linux, Windows) with automatic browser detection
-- Tokens encrypted at rest; refreshed silently in the background
-- 30 tools across mail, calendar, contacts, and people
+## Highlights
+
+- **Zero setup auth.** No Azure app registration, no admin consent, no client secrets. Sign in once in a browser; tokens are cached encrypted and refreshed silently after that.
+- **Over 50 tools** across mail, calendar, contacts, people, the org directory, and your own account settings.
+- **Safe by default.** Email bodies are sent as HTML so line breaks always render, and the draft tools let you compose and review before anything is sent.
+- **Scheduling and availability.** Read free/busy, find meeting times across attendees, and check who is out of office.
+- **Cross platform.** macOS, Linux, and Windows, with automatic browser detection.
 
 ## How it works
 
@@ -25,7 +28,7 @@ Microsoft Outlook Web (OWA) uses MSAL to store OAuth tokens in `localStorage`. T
 1. Opens a browser to `outlook.office.com` via Playwright
 2. Extracts the MSAL token cache from `localStorage`, using OWA's own first party client ID (`9199bf20-a13f-4107-85dc-02114787ef48`)
 3. Caches the access token, refresh token, and session state in `~/.msoutlook-mcp-server/` (AES-256-GCM encrypted)
-4. Refreshes tokens automatically using the refresh token (HTTP, no browser) or headless browser as fallback
+4. Refreshes tokens automatically using the refresh token (HTTP, no browser) or a headless browser as fallback
 
 No Azure app registration. No admin consent. No client secrets. Your access is limited to what your account can already do.
 
@@ -43,6 +46,12 @@ No Azure app registration. No admin consent. No client secrets. Your access is l
 ```
 
 Then run `outlook_login` from your MCP client. On first use a browser opens so you can sign in; after that, logins are silent and no browser appears. Do not close the window manually, it closes itself once you are signed in.
+
+## Sending mail: behaviour to know
+
+- **HTML by default.** `outlook_send_email`, `outlook_create_draft`, and the reply/forward tools render their body as HTML, so use `<br>`, `<br><br>`, and `<ul><li>` for structure. Plain text is still accepted: its newlines are converted to `<br>` automatically, so a message never arrives as one collapsed block.
+- **Review before sending.** Prefer the draft tools (`outlook_create_draft`, `outlook_create_reply_draft`, `outlook_create_forward_draft`) so you can review or edit with `outlook_update_draft` and then send with `outlook_send_draft`. The immediate tools (`outlook_send_email`, `outlook_reply`, `outlook_forward`) send straight away.
+- **Presence caveat.** `outlook_get_availability` reports free/busy and out of office, which is what Outlook can read. The live Teams presence dot (Available / Away / DoNotDisturb) needs a Teams token and is not available here.
 
 ## Tools
 
@@ -62,17 +71,28 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_get_email` | Read full email content by ID |
 | `outlook_get_unread` | Get unread emails from Inbox |
 | `outlook_search_emails` | Search emails by keyword, with optional received date range and pagination. Omit the keyword to list everything in a date range |
-| `outlook_send_email` | Send an email |
-| `outlook_create_draft` | Create a draft without sending |
+| `outlook_send_email` | Send an email (HTML body by default; plain text newlines auto convert to `<br>`; supports file `attachments`) |
+| `outlook_create_draft` | Create a new draft without sending (review-first flow; supports file `attachments`) |
 | `outlook_send_draft` | Send a previously created draft |
-| `outlook_reply` | Reply to an email (or reply all) |
-| `outlook_forward` | Forward an email |
+| `outlook_update_draft` | Edit a draft's subject, recipients, body, or importance |
+| `outlook_reply` | Reply to an email immediately (or reply all) |
+| `outlook_create_reply_draft` | Create a reply (or reply all) as a draft to review before sending |
+| `outlook_forward` | Forward an email immediately |
+| `outlook_create_forward_draft` | Create a forward as a draft to review before sending |
+| `outlook_add_attachment` | Attach a local file to an existing draft |
+| `outlook_list_attachments` | List attachments on an email |
+| `outlook_save_attachment` | Download an attachment to a local file |
+| `outlook_get_conversation` | Get every message in a thread by conversation ID |
+| `outlook_set_categories` | Set colour categories (labels) on an email |
 | `outlook_mark_read` | Mark email as read or unread |
 | `outlook_flag` | Flag or unflag an email |
 | `outlook_move_email` | Move email to a different folder |
 | `outlook_delete_email` | Delete an email |
 | `outlook_batch` | Run one bulk action (mark read, mark unread, flag, unflag, move, delete) over many emails at once |
 | `outlook_list_folders` | List all mail folders with unread counts |
+| `outlook_create_folder` | Create a mail folder (optionally nested) |
+| `outlook_rename_folder` | Rename a mail folder |
+| `outlook_delete_folder` | Delete a mail folder |
 
 ### Calendar
 
@@ -86,6 +106,10 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_respond_to_event` | Accept, decline, or tentatively accept an invite |
 | `outlook_search_events` | Search events by keyword |
 | `outlook_list_calendars` | List all calendars |
+| `outlook_get_schedule` | Free/busy schedule (busy blocks + working hours) for people over a window |
+| `outlook_find_meeting_times` | Suggest meeting slots that work across attendees |
+| `outlook_cancel_event` | Cancel an event you organize and notify attendees |
+| `outlook_forward_event` | Forward a meeting invite to more people |
 
 ### Contacts & People
 
@@ -96,6 +120,18 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_create_contact` | Create a new contact |
 | `outlook_delete_contact` | Delete a contact |
 | `outlook_search_people` | Search the organisation directory |
+| `outlook_get_availability` | Check whether people are free/busy now, their out-of-office status, and working hours (free/busy and mail tips; not the live Teams presence dot) |
+| `outlook_get_user_profile` | Get a colleague's directory profile (title, department, office, phone) |
+| `outlook_get_manager` | Get a person's manager from the org directory |
+| `outlook_get_direct_reports` | List a person's direct reports |
+| `outlook_get_user_photo` | Download a person's profile photo to a file |
+
+### Account / Out of office
+
+| Tool | Description |
+|------|-------------|
+| `outlook_get_automatic_replies` | Read your out-of-office / automatic reply settings |
+| `outlook_set_automatic_replies` | Turn your out-of-office on (always or scheduled) or off |
 
 ## Session storage
 
