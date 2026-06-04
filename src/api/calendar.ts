@@ -198,3 +198,104 @@ export async function listCalendars(): Promise<Calendar[]> {
   });
   return res.value;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Free/busy schedule
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ScheduleItem {
+  Status?: string;
+  Start?: DateTimeTimeZone;
+  End?: DateTimeTimeZone;
+  Subject?: string;
+  Location?: string;
+}
+
+export interface ScheduleInformation {
+  ScheduleId: string;
+  AvailabilityView?: string;
+  ScheduleItems?: ScheduleItem[];
+  WorkingHours?: {
+    DaysOfWeek?: string[];
+    StartTime?: string;
+    EndTime?: string;
+    TimeZone?: { Name?: string };
+  };
+}
+
+/** Free/busy for a batch of addresses over a window (one digit per interval). */
+export async function getSchedule(
+  emails: string[],
+  start: Date,
+  end: Date,
+  intervalMinutes = 30,
+): Promise<ScheduleInformation[]> {
+  const res = await owaPost<ODataResponse<ScheduleInformation>>('/calendar/getschedule', {
+    Schedules: emails,
+    StartTime: { DateTime: start.toISOString(), TimeZone: 'UTC' },
+    EndTime: { DateTime: end.toISOString(), TimeZone: 'UTC' },
+    AvailabilityViewInterval: intervalMinutes,
+  });
+  return res.value ?? [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Find meeting times
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MeetingTimeSuggestion {
+  Confidence?: number;
+  OrganizerAvailability?: string;
+  MeetingTimeSlot?: { Start: DateTimeTimeZone; End: DateTimeTimeZone };
+  AttendeeAvailability?: Array<{ Availability: string; Attendee: { EmailAddress: { Address: string } } }>;
+}
+
+export interface FindMeetingTimesOptions {
+  attendees: string[];
+  durationMinutes?: number;
+  start?: string;
+  end?: string;
+  maxCandidates?: number;
+  timeZone?: string;
+}
+
+export async function findMeetingTimes(opts: FindMeetingTimesOptions): Promise<{
+  suggestions: MeetingTimeSuggestion[];
+  emptyReason?: string;
+}> {
+  const tz = opts.timeZone ?? 'UTC';
+  const now = new Date();
+  const start = opts.start ?? now.toISOString();
+  const end = opts.end ?? new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString();
+  const minutes = opts.durationMinutes ?? 30;
+
+  const res = await owaPost<{ MeetingTimeSuggestions?: MeetingTimeSuggestion[]; EmptySuggestionsReason?: string }>(
+    '/findmeetingtimes',
+    {
+      Attendees: opts.attendees.map(addr => ({ Type: 'Required', EmailAddress: { Address: addr } })),
+      TimeConstraint: {
+        Timeslots: [{ Start: { DateTime: start, TimeZone: tz }, End: { DateTime: end, TimeZone: tz } }],
+      },
+      MeetingDuration: `PT${minutes}M`,
+      MaxCandidates: opts.maxCandidates ?? 5,
+    },
+  );
+  return { suggestions: res.MeetingTimeSuggestions ?? [], emptyReason: res.EmptySuggestionsReason || undefined };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cancel / forward event
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Cancel an event you organize, notifying attendees. */
+export async function cancelEvent(id: string, comment?: string): Promise<void> {
+  await owaPost(`/events/${id}/cancel`, { Comment: comment ?? '' });
+}
+
+/** Forward a meeting invite to additional people. */
+export async function forwardEvent(id: string, to: string[], comment?: string): Promise<void> {
+  await owaPost(`/events/${id}/forward`, {
+    ToRecipients: to.map(addr => ({ EmailAddress: { Address: addr } })),
+    Comment: comment ?? '',
+  });
+}

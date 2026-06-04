@@ -101,3 +101,37 @@ export async function graphPost<T>(path: string, body: unknown): Promise<T> {
   });
   return parseResponse<T>(res);
 }
+
+/**
+ * Graph GET against an arbitrary path (not forced under /me), e.g.
+ * '/users/{email}', '/users/{email}/manager', '/users/{email}/directReports'.
+ * Callers include the full path after the version segment.
+ */
+export async function graphGetPath<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const token = await getGraphToken();
+  if (!token) throw new Error('Graph token unavailable. Run outlook_login first.');
+
+  let url = `${GRAPH_BASE}${path}`;
+  if (params) {
+    const qs = new URLSearchParams(params).toString();
+    url += (url.includes('?') ? '&' : '?') + qs;
+  }
+
+  const res = await fetchWithRetry(url, { method: 'GET', headers: getBearerHeaders(token) });
+  return parseResponse<T>(res);
+}
+
+/** Graph GET that returns raw bytes (e.g. a profile photo at /photo/$value). */
+export async function graphGetBinary(path: string): Promise<{ contentType: string; bytes: Buffer }> {
+  const token = await getGraphToken();
+  if (!token) throw new Error('Graph token unavailable. Run outlook_login first.');
+
+  const res = await fetchWithRetry(`${GRAPH_BASE}${path}`, { method: 'GET', headers: getBearerHeaders(token) });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+  }
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return { contentType, bytes };
+}

@@ -6,6 +6,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { listContacts, getContact, createContact, deleteContact, type Contact } from '../api/contacts.js';
 import { searchPeople, type Person } from '../api/people.js';
+import { getAvailability, type AvailabilityInfo } from '../api/presence.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -37,6 +38,36 @@ function formatPerson(p: Person): string {
     p.Department ? `Department: ${p.Department}` : '',
     p.CompanyName ? `Company: ${p.CompanyName}` : '',
   ].filter(Boolean).join('\n');
+}
+
+function formatAvailability(a: AvailabilityInfo): string {
+  const who = a.displayName ? `${a.displayName} <${a.email}>` : a.email;
+  const lines = [`Person: ${who}`];
+
+  if (a.status) {
+    const until = a.statusChangesAt ? ` until ${a.statusChangesAt}` : '';
+    lines.push(`Free/busy now: ${a.status}${until}`);
+  } else {
+    lines.push(`Free/busy now: unavailable${a.scheduleError ? ` (${a.scheduleError})` : ''}`);
+  }
+
+  if (a.outOfOffice?.isActive) {
+    const window = [a.outOfOffice.scheduledStart, a.outOfOffice.scheduledEnd].filter(Boolean).join(' to ');
+    lines.push(`Out of office: yes${window ? ` (${window})` : ''}`);
+    if (a.outOfOffice.message) lines.push(`Auto reply: ${a.outOfOffice.message.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()}`);
+  } else if (a.outOfOffice) {
+    lines.push('Out of office: no');
+  } else {
+    lines.push(`Out of office: unknown${a.outOfOfficeError ? ` (${a.outOfOfficeError})` : ''}`);
+  }
+
+  if (a.workingHours?.startTime && a.workingHours.endTime) {
+    const days = a.workingHours.daysOfWeek?.length ? a.workingHours.daysOfWeek.join(', ') : '';
+    const tz = a.workingHours.timeZone ? ` ${a.workingHours.timeZone}` : '';
+    lines.push(`Working hours: ${a.workingHours.startTime} to ${a.workingHours.endTime}${tz}${days ? ` (${days})` : ''}`);
+  }
+
+  return lines.join('\n');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +163,21 @@ export function registerContactTools(server: McpServer): void {
       const people = await searchPeople(query, top ?? 10);
       if (people.length === 0) return { content: [{ type: 'text', text: 'No people found.' }] };
       const text = people.map((p, i) => `--- Person ${i + 1} ---\n${formatPerson(p)}`).join('\n\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  // ── outlook_get_availability ─────────────────────────────────────────────
+  server.tool(
+    'outlook_get_availability',
+    'Check whether colleagues are free or busy right now and whether they are out of office, by email address. Returns current free/busy status (Free, Tentative, Busy, OutOfOffice, WorkingElsewhere) with the time it next changes, their out-of-office / automatic reply status and message, and their working hours and time zone. This is read from Outlook calendar free/busy and mail tips. Note: the live Teams presence dot (Available/Away/DoNotDisturb) is not available from Outlook, use the Teams MCP for that. Pass one or more email addresses; use outlook_search_people first if you only have a name.',
+    {
+      emails: z.array(z.string().email()).min(1).max(50).describe('Email addresses to check (1 to 50)'),
+      window_hours: z.number().int().min(1).max(48).optional().describe('How many hours ahead to scan free/busy for the next status change (default 8)'),
+    },
+    async ({ emails, window_hours }) => {
+      const results = await getAvailability(emails, window_hours ?? 8);
+      const text = results.map(formatAvailability).join('\n\n');
       return { content: [{ type: 'text', text }] };
     },
   );

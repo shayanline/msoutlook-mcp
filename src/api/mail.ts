@@ -2,7 +2,38 @@
  * Mail API — email CRUD, search, and folder operations.
  */
 
+import { readFile } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
 import { owaGet, owaPost, owaPatch, owaDelete } from './client.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Body formatting
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HTML_TAG_RE = /<\/?[a-z][^>]*>/i;
+
+/** True when the string already carries HTML markup we should leave untouched. */
+export function looksLikeHtml(s: string): boolean {
+  return HTML_TAG_RE.test(s);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Normalise an outgoing body to HTML so line breaks survive.
+ *
+ * Outlook renders reply/forward comments and HTML bodies as HTML, where a raw
+ * "\n" collapses and the whole message arrives as one block. To stop that:
+ * - if the body already contains HTML markup, pass it through untouched, but
+ * - if it is plain text, escape it and turn newlines into <br> (a blank line,
+ *   i.e. a double newline, becomes <br><br> so paragraphs keep their gap).
+ */
+export function toHtmlBody(body: string): string {
+  if (looksLikeHtml(body)) return body;
+  return escapeHtml(body).replace(/\r\n?/g, '\n').replace(/\n/g, '<br>');
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -33,6 +64,8 @@ export interface Message {
   HasAttachments?: boolean;
   Importance?: string;
   Flag?: { FlagStatus: string };
+  Categories?: string[];
+  IsDraft?: boolean;
   ConversationId?: string;
   ParentFolderId?: string;
   WebLink?: string;
@@ -114,6 +147,41 @@ export async function getMessage(id: string, includeAttachments = false): Promis
 // Send email
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** A file attachment ready to send (content already base64 encoded). */
+export interface OutgoingAttachment {
+  name: string;
+  contentType: string;
+  contentBytes: string;
+}
+
+function toOwaAttachment(a: OutgoingAttachment): Record<string, unknown> {
+  return {
+    '@odata.type': '#Microsoft.OutlookServices.FileAttachment',
+    Name: a.name,
+    ContentType: a.contentType,
+    ContentBytes: a.contentBytes,
+  };
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.txt': 'text/plain', '.csv': 'text/csv', '.html': 'text/html',
+  '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.zip': 'application/zip', '.json': 'application/json', '.ics': 'text/calendar',
+};
+
+/** Read a file from disk into an outgoing attachment (base64 encoded). */
+export async function fileToAttachment(path: string): Promise<OutgoingAttachment> {
+  const data = await readFile(path);
+  return {
+    name: basename(path),
+    contentType: CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream',
+    contentBytes: data.toString('base64'),
+  };
+}
+
 export interface SendEmailOptions {
   to: string[];
   cc?: string[];
@@ -122,6 +190,7 @@ export interface SendEmailOptions {
   body: string;
   bodyType?: 'Text' | 'HTML';
   importance?: 'Low' | 'Normal' | 'High';
+  attachments?: OutgoingAttachment[];
   saveToSentItems?: boolean;
 }
 
@@ -132,14 +201,18 @@ export async function sendEmail(opts: SendEmailOptions): Promise<void> {
   const ccRecipients = opts.cc?.map(addr => ({ EmailAddress: { Address: addr } }));
   const bccRecipients = opts.bcc?.map(addr => ({ EmailAddress: { Address: addr } }));
 
+  const bodyType = opts.bodyType ?? 'HTML';
+  const content = bodyType === 'HTML' ? toHtmlBody(opts.body) : opts.body;
+
   await owaPost('/sendmail', {
     Message: {
       Subject: opts.subject,
-      Body: { ContentType: opts.bodyType ?? 'Text', Content: opts.body },
+      Body: { ContentType: bodyType, Content: content },
       ToRecipients: toRecipients,
       ...(ccRecipients?.length ? { CcRecipients: ccRecipients } : {}),
       ...(bccRecipients?.length ? { BccRecipients: bccRecipients } : {}),
       Importance: opts.importance ?? 'Normal',
+      ...(opts.attachments?.length ? { Attachments: opts.attachments.map(toOwaAttachment) } : {}),
     },
     SaveToSentItems: opts.saveToSentItems !== false,
   });
@@ -154,13 +227,17 @@ export async function createDraft(opts: Omit<SendEmailOptions, 'saveToSentItems'
   const ccRecipients = opts.cc?.map(addr => ({ EmailAddress: { Address: addr } }));
   const bccRecipients = opts.bcc?.map(addr => ({ EmailAddress: { Address: addr } }));
 
+  const bodyType = opts.bodyType ?? 'HTML';
+  const content = bodyType === 'HTML' ? toHtmlBody(opts.body) : opts.body;
+
   return owaPost<Message>('/messages', {
     Subject: opts.subject,
-    Body: { ContentType: opts.bodyType ?? 'Text', Content: opts.body },
+    Body: { ContentType: bodyType, Content: content },
     ToRecipients: toRecipients,
     ...(ccRecipients?.length ? { CcRecipients: ccRecipients } : {}),
     ...(bccRecipients?.length ? { BccRecipients: bccRecipients } : {}),
     Importance: opts.importance ?? 'Normal',
+    ...(opts.attachments?.length ? { Attachments: opts.attachments.map(toOwaAttachment) } : {}),
   });
 }
 
@@ -171,8 +248,36 @@ export async function createDraft(opts: Omit<SendEmailOptions, 'saveToSentItems'
 export async function replyToMessage(id: string, body: string, replyAll = false): Promise<void> {
   const action = replyAll ? 'replyall' : 'reply';
   await owaPost(`/messages/${id}/${action}`, {
-    Comment: body,
+    Comment: toHtmlBody(body),
   });
+}
+
+/**
+ * Create a reply (or reply-all) as a draft instead of sending it.
+ *
+ * Returns the new draft message, which already has the recipients and the
+ * quoted original prefilled, with the supplied body inserted above the quote.
+ * The caller can then review or edit it in Outlook and send it later with
+ * sendDraft (outlook_send_draft).
+ */
+export async function createReplyDraft(id: string, body: string, replyAll = false): Promise<Message> {
+  const action = replyAll ? 'createreplyall' : 'createreply';
+  return owaPost<Message>(`/messages/${id}/${action}`, {
+    Comment: toHtmlBody(body),
+  });
+}
+
+/**
+ * Create a forward as a draft instead of sending it. Returns the draft message
+ * with the quoted original prefilled; recipients and any final edits can be set
+ * in Outlook (or via a later update) before sending with sendDraft.
+ */
+export async function createForwardDraft(id: string, body = '', to?: string[]): Promise<Message> {
+  const payload: Record<string, unknown> = { Comment: body ? toHtmlBody(body) : '' };
+  if (to?.length) {
+    payload.ToRecipients = to.map(addr => ({ EmailAddress: { Address: addr } }));
+  }
+  return owaPost<Message>(`/messages/${id}/createforward`, payload);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,7 +287,7 @@ export async function replyToMessage(id: string, body: string, replyAll = false)
 export async function forwardMessage(id: string, to: string[], comment?: string): Promise<void> {
   await owaPost(`/messages/${id}/forward`, {
     ToRecipients: to.map(addr => ({ EmailAddress: { Address: addr } })),
-    Comment: comment ?? '',
+    Comment: comment ? toHtmlBody(comment) : '',
   });
 }
 
@@ -325,4 +430,101 @@ export async function getUnreadMessages(top = 10): Promise<Message[]> {
 
 export async function sendDraft(draftId: string): Promise<void> {
   await owaPost(`/messages/${draftId}/send`, {});
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Update a draft (recipients, subject, body)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface UpdateDraftOptions {
+  subject?: string;
+  body?: string;
+  bodyType?: 'Text' | 'HTML';
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  importance?: 'Low' | 'Normal' | 'High';
+}
+
+export async function updateDraft(id: string, opts: UpdateDraftOptions): Promise<Message> {
+  const patch: Record<string, unknown> = {};
+  if (opts.subject !== undefined) patch.Subject = opts.subject;
+  if (opts.body !== undefined) {
+    const bodyType = opts.bodyType ?? 'HTML';
+    patch.Body = { ContentType: bodyType, Content: bodyType === 'HTML' ? toHtmlBody(opts.body) : opts.body };
+  }
+  if (opts.to) patch.ToRecipients = opts.to.map(addr => ({ EmailAddress: { Address: addr } }));
+  if (opts.cc) patch.CcRecipients = opts.cc.map(addr => ({ EmailAddress: { Address: addr } }));
+  if (opts.bcc) patch.BccRecipients = opts.bcc.map(addr => ({ EmailAddress: { Address: addr } }));
+  if (opts.importance) patch.Importance = opts.importance;
+  return owaPatch<Message>(`/messages/${id}`, patch);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Attachments
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface FileAttachmentContent {
+  Id: string;
+  Name: string;
+  ContentType: string;
+  Size: number;
+  ContentBytes?: string;
+}
+
+export async function listAttachments(messageId: string): Promise<Attachment[]> {
+  const res = await owaGet<ODataResponse<Attachment>>(`/messages/${messageId}/attachments`, {
+    '$select': 'Id,Name,ContentType,Size,IsInline',
+  });
+  return res.value;
+}
+
+/** Fetch one attachment including its base64 content bytes. */
+export async function getAttachmentContent(messageId: string, attachmentId: string): Promise<FileAttachmentContent> {
+  return owaGet<FileAttachmentContent>(`/messages/${messageId}/attachments/${attachmentId}`);
+}
+
+/** Add a file attachment to an existing message/draft. */
+export async function addAttachment(messageId: string, attachment: OutgoingAttachment): Promise<void> {
+  await owaPost(`/messages/${messageId}/attachments`, toOwaAttachment(attachment));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Conversation (thread)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getConversation(conversationId: string, top = 50): Promise<Message[]> {
+  // Filtering by ConversationId cannot be combined with $orderby (the API
+  // rejects it as an inefficient filter), so we sort by received date here.
+  const res = await owaGet<ODataResponse<Message>>('/messages', {
+    '$filter': `ConversationId eq '${conversationId.replace(/'/g, "''")}'`,
+    '$top': String(top),
+    '$select': 'Id,Subject,BodyPreview,From,ToRecipients,ReceivedDateTime,IsRead,HasAttachments,ConversationId,WebLink',
+  });
+  return res.value.sort((a, b) => (a.ReceivedDateTime ?? '').localeCompare(b.ReceivedDateTime ?? ''));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Categories
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function setCategories(messageId: string, categories: string[]): Promise<Message> {
+  return owaPatch<Message>(`/messages/${messageId}`, { Categories: categories });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Folder management
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function createFolder(displayName: string, parentFolderId?: string): Promise<MailFolder> {
+  const path = parentFolderId ? `/mailfolders/${parentFolderId}/childfolders` : '/mailfolders';
+  return owaPost<MailFolder>(path, { DisplayName: displayName });
+}
+
+export async function renameFolder(id: string, displayName: string): Promise<MailFolder> {
+  return owaPatch<MailFolder>(`/mailfolders/${id}`, { DisplayName: displayName });
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  await owaDelete(`/mailfolders/${id}`);
 }

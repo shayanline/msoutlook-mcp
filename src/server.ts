@@ -7,17 +7,19 @@ import { registerAuthTools } from './tools/auth-tools.js';
 import { registerMailTools } from './tools/mail-tools.js';
 import { registerCalendarTools } from './tools/calendar-tools.js';
 import { registerContactTools } from './tools/contact-tools.js';
+import { registerDirectoryTools } from './tools/directory-tools.js';
 
 export function createServer(): McpServer {
   const server = new McpServer({
     name: 'msoutlook-mcp',
-    version: '0.1.0',
+    version: '0.3.0',
   });
 
   registerAuthTools(server);
   registerMailTools(server);
   registerCalendarTools(server);
   registerContactTools(server);
+  registerDirectoryTools(server);
 
   return server;
 }

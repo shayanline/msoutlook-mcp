@@ -13,8 +13,13 @@ import {
   respondToEvent,
   searchEvents,
   listCalendars,
+  getSchedule,
+  findMeetingTimes,
+  cancelEvent,
+  forwardEvent,
   type CalendarEvent,
   type EventResponse,
+  type ScheduleInformation,
 } from '../api/calendar.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +67,22 @@ function formatEvent(e: CalendarEvent, full = false): string {
 function formatEventList(events: CalendarEvent[]): string {
   if (events.length === 0) return 'No events found.';
   return events.map((e, i) => `--- Event ${i + 1} ---\n${formatEvent(e)}`).join('\n\n');
+}
+
+function formatSchedule(s: ScheduleInformation): string {
+  const lines = [`Person: ${s.ScheduleId}`];
+  const busy = (s.ScheduleItems ?? []).filter(i => i.Status && i.Status !== 'Free');
+  if (busy.length === 0) {
+    lines.push('No busy blocks in the window (free).');
+  } else {
+    lines.push('Busy blocks:');
+    lines.push(...busy.map(i => `  - ${i.Status}: ${i.Start?.DateTime ?? '?'} to ${i.End?.DateTime ?? '?'}${i.Subject ? ` (${i.Subject})` : ''}`));
+  }
+  const wh = s.WorkingHours;
+  if (wh?.StartTime && wh.EndTime) {
+    lines.push(`Working hours: ${wh.StartTime} to ${wh.EndTime}${wh.TimeZone?.Name ? ` ${wh.TimeZone.Name}` : ''}`);
+  }
+  return lines.join('\n');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +251,87 @@ export function registerCalendarTools(server: McpServer): void {
         .map(c => `${c.Name} (ID: ${c.Id})${c.IsDefaultCalendar ? ' [Default]' : ''}${c.CanEdit ? ' [Editable]' : ''}`)
         .join('\n');
       return { content: [{ type: 'text', text: text || 'No calendars found.' }] };
+    },
+  );
+
+  // ── outlook_get_schedule ─────────────────────────────────────────────────
+  server.tool(
+    'outlook_get_schedule',
+    'Get the free/busy schedule for one or more people over a time window: their busy blocks (Busy, Tentative, OutOfOffice, WorkingElsewhere) and working hours. Use this to see when people are occupied. For a quick "are they free or out of office right now" summary use outlook_get_availability instead.',
+    {
+      emails: z.array(z.string().email()).min(1).max(50).describe('Email addresses to check'),
+      start: z.string().optional().describe('ISO 8601 window start (defaults to now)'),
+      end: z.string().optional().describe('ISO 8601 window end (defaults to 24 hours from start)'),
+      interval_minutes: z.number().int().min(5).max(1440).optional().describe('Free/busy slot size in minutes (default 30)'),
+    },
+    async ({ emails, start, end, interval_minutes }) => {
+      const startDate = start ? new Date(start) : new Date();
+      const endDate = end ? new Date(end) : new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+      const schedules = await getSchedule(emails, startDate, endDate, interval_minutes ?? 30);
+      const text = schedules.length ? schedules.map(formatSchedule).join('\n\n') : 'No schedule information returned.';
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  // ── outlook_find_meeting_times ───────────────────────────────────────────
+  server.tool(
+    'outlook_find_meeting_times',
+    'Suggest meeting time slots that work for a set of attendees, based on their free/busy. Returns ranked candidate slots with a confidence score and each attendee\'s availability. Useful for scheduling a meeting across several people.',
+    {
+      attendees: z.array(z.string().email()).min(1).max(20).describe('Attendee email addresses'),
+      duration_minutes: z.number().int().min(15).max(480).optional().describe('Meeting length in minutes (default 30)'),
+      start: z.string().optional().describe('ISO 8601 earliest start to consider (defaults to now)'),
+      end: z.string().optional().describe('ISO 8601 latest end to consider (defaults to 5 days out)'),
+      max_candidates: z.number().int().min(1).max(20).optional().describe('Max suggestions to return (default 5)'),
+      time_zone: z.string().optional().describe('Time zone for the window (default UTC)'),
+    },
+    async ({ attendees, duration_minutes, start, end, max_candidates, time_zone }) => {
+      const { suggestions, emptyReason } = await findMeetingTimes({
+        attendees,
+        durationMinutes: duration_minutes,
+        start,
+        end,
+        maxCandidates: max_candidates,
+        timeZone: time_zone,
+      });
+      if (suggestions.length === 0) {
+        return { content: [{ type: 'text', text: `No meeting times found.${emptyReason ? ` Reason: ${emptyReason}` : ''}` }] };
+      }
+      const text = suggestions.map((s, i) => {
+        const slot = s.MeetingTimeSlot;
+        const who = (s.AttendeeAvailability ?? []).map(a => `${a.Attendee.EmailAddress.Address}: ${a.Availability}`).join(', ');
+        return `--- Suggestion ${i + 1} (confidence ${s.Confidence ?? '?'}%) ---\n${slot?.Start.DateTime} to ${slot?.End.DateTime} ${slot?.Start.TimeZone ?? ''}\n${who}`;
+      }).join('\n\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  // ── outlook_cancel_event ─────────────────────────────────────────────────
+  server.tool(
+    'outlook_cancel_event',
+    'Cancel an event that you organize, sending a cancellation to all attendees. This is different from outlook_delete_event (which just removes it from your calendar). Confirm with the user before calling.',
+    {
+      id: z.string().describe('Event ID to cancel'),
+      comment: z.string().optional().describe('Optional cancellation message to attendees'),
+    },
+    async ({ id, comment }) => {
+      await cancelEvent(id, comment);
+      return { content: [{ type: 'text', text: 'Event cancelled and attendees notified.' }] };
+    },
+  );
+
+  // ── outlook_forward_event ────────────────────────────────────────────────
+  server.tool(
+    'outlook_forward_event',
+    'Forward a meeting invitation to additional people, effectively inviting them.',
+    {
+      id: z.string().describe('Event ID to forward'),
+      to: z.array(z.string().email()).min(1).describe('People to forward the invite to'),
+      comment: z.string().optional().describe('Optional message to include'),
+    },
+    async ({ id, to, comment }) => {
+      await forwardEvent(id, to, comment);
+      return { content: [{ type: 'text', text: `Invite forwarded to ${to.join(', ')}.` }] };
     },
   );
 }

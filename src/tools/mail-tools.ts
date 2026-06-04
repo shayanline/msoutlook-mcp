@@ -2,6 +2,7 @@
  * Email MCP tools.
  */
 
+import { writeFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
@@ -10,6 +11,8 @@ import {
   sendEmail,
   createDraft,
   replyToMessage,
+  createReplyDraft,
+  createForwardDraft,
   forwardMessage,
   markMessageRead,
   flagMessage,
@@ -19,7 +22,18 @@ import {
   listFolders,
   getUnreadMessages,
   sendDraft,
+  updateDraft,
+  fileToAttachment,
+  listAttachments,
+  getAttachmentContent,
+  addAttachment,
+  getConversation,
+  setCategories,
+  createFolder,
+  renameFolder,
+  deleteFolder,
   type Message,
+  type Attachment,
 } from '../api/mail.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,17 +170,19 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_send_email ───────────────────────────────────────────────────
   server.tool(
     'outlook_send_email',
-    'Send an email. Always confirm content with the user before calling this tool.',
+    'Send an email immediately. Body format defaults to HTML (body_type HTML). Prefer the review first flow: unless the user has asked to send straight away, create the message with outlook_create_draft so they can review it, then send with outlook_send_draft once approved. Always confirm content with the user before calling this tool. Write structure with HTML (<br> for a line break, <br><br> for a paragraph gap, <ul><li>...</li></ul> for lists). Plain text is still accepted and its newlines are converted to <br> automatically, so a multi line message never arrives as one block.',
     {
       to: z.array(z.string().email()).describe('List of recipient email addresses'),
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
       bcc: z.array(z.string().email()).optional().describe('BCC recipients'),
       subject: z.string().describe('Email subject'),
-      body: z.string().describe('Email body text'),
-      body_type: z.enum(['Text', 'HTML']).optional().describe('Body format: Text or HTML (default: Text)'),
+      body: z.string().describe('Email body. Prefer HTML markup (<br>, <div>, <ul><li>) for layout. Plain text is fine too: its newlines are auto converted to <br> so line breaks survive.'),
+      body_type: z.enum(['Text', 'HTML']).optional().describe('Body format. Default: HTML, which is recommended so line breaks render. Only use Text to send a literal plain text body with no auto formatting.'),
       importance: z.enum(['Low', 'Normal', 'High']).optional().describe('Email importance (default: Normal)'),
+      attachments: z.array(z.string()).optional().describe('Local file paths to attach. Each file is read from disk and attached.'),
     },
-    async ({ to, cc, bcc, subject, body, body_type, importance }) => {
+    async ({ to, cc, bcc, subject, body, body_type, importance, attachments }) => {
+      const files = attachments?.length ? await Promise.all(attachments.map(fileToAttachment)) : undefined;
       await sendEmail({
         to,
         cc,
@@ -175,24 +191,28 @@ export function registerMailTools(server: McpServer): void {
         body,
         bodyType: body_type,
         importance,
+        attachments: files,
       });
-      return { content: [{ type: 'text', text: `Email sent to ${to.join(', ')}.` }] };
+      const note = files?.length ? ` with ${files.length} attachment(s)` : '';
+      return { content: [{ type: 'text', text: `Email sent to ${to.join(', ')}${note}.` }] };
     },
   );
 
   // ── outlook_create_draft ─────────────────────────────────────────────────
   server.tool(
     'outlook_create_draft',
-    'Create a draft email without sending it.',
+    'Create a draft email without sending it. This is the preferred way to compose a new email: create the draft here so the user can review it in Outlook, then send it with outlook_send_draft once they approve, unless the user has asked to send straight away. Body format defaults to HTML (body_type HTML): use HTML for layout (<br>, <br><br>, <ul><li>). Plain text newlines are auto converted to <br> so the draft keeps its line breaks.',
     {
       to: z.array(z.string().email()).describe('Recipient email addresses'),
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
       subject: z.string().describe('Email subject'),
-      body: z.string().describe('Email body'),
-      body_type: z.enum(['Text', 'HTML']).optional().describe('Body format (default: Text)'),
+      body: z.string().describe('Email body. Prefer HTML markup for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
+      body_type: z.enum(['Text', 'HTML']).optional().describe('Body format. Default: HTML. Only use Text for a literal plain text body with no auto formatting.'),
+      attachments: z.array(z.string()).optional().describe('Local file paths to attach to the draft.'),
     },
-    async ({ to, cc, subject, body, body_type }) => {
-      const draft = await createDraft({ to, cc, subject, body, bodyType: body_type });
+    async ({ to, cc, subject, body, body_type, attachments }) => {
+      const files = attachments?.length ? await Promise.all(attachments.map(fileToAttachment)) : undefined;
+      const draft = await createDraft({ to, cc, subject, body, bodyType: body_type, attachments: files });
       return {
         content: [{
           type: 'text',
@@ -218,15 +238,55 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_reply ────────────────────────────────────────────────────────
   server.tool(
     'outlook_reply',
-    'Reply to an email.',
+    'Reply to an email, staying in the same thread and keeping all recipients when reply_all is true. This sends immediately, there is no separate reply draft, so confirm the content with the user before calling unless they have asked to send straight away. The reply is always rendered as HTML, so use HTML for layout (<br>, <br><br>, <ul><li>). Plain text is accepted and its newlines are auto converted to <br>, so a multi paragraph reply never collapses into one block.',
     {
       id: z.string().describe('Message ID to reply to'),
-      body: z.string().describe('Reply body text'),
-      reply_all: z.boolean().optional().describe('If true, reply to all recipients (default: false)'),
+      body: z.string().describe('Reply body. Prefer HTML markup (<br>, <ul><li>) for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
+      reply_all: z.boolean().optional().describe('If true, reply to all recipients and keep every CC on the thread (default: false)'),
     },
     async ({ id, body, reply_all }) => {
       await replyToMessage(id, body, reply_all ?? false);
       return { content: [{ type: 'text', text: 'Reply sent.' }] };
+    },
+  );
+
+  // ── outlook_create_reply_draft ───────────────────────────────────────────
+  server.tool(
+    'outlook_create_reply_draft',
+    'Create a reply (or reply-all) as a DRAFT instead of sending it. This is the review-first way to reply: the draft is saved to Drafts with the recipients and quoted original prefilled and your text inserted above the quote, so the user can review or edit it in Outlook, then send it with outlook_send_draft once approved. Prefer this over outlook_reply unless the user has asked to send straight away. Body is rendered as HTML: use HTML for layout (<br>, <br><br>, <ul><li>); plain text newlines are auto converted to <br>.',
+    {
+      id: z.string().describe('Message ID to reply to'),
+      body: z.string().describe('Reply body. Prefer HTML markup (<br>, <ul><li>) for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
+      reply_all: z.boolean().optional().describe('If true, reply to all recipients and keep every CC on the thread (default: false)'),
+    },
+    async ({ id, body, reply_all }) => {
+      const draft = await createReplyDraft(id, body, reply_all ?? false);
+      return {
+        content: [{
+          type: 'text',
+          text: `Reply draft created and saved to Drafts.\nID: ${draft.Id}\nSubject: ${draft.Subject}\n\nReview or edit it in Outlook, then send with outlook_send_draft (id above).`,
+        }],
+      };
+    },
+  );
+
+  // ── outlook_create_forward_draft ─────────────────────────────────────────
+  server.tool(
+    'outlook_create_forward_draft',
+    'Create a forward as a DRAFT instead of sending it. The draft is saved to Drafts with the quoted original prefilled; recipients can be set here or added later in Outlook. Review or edit, then send with outlook_send_draft. Body is rendered as HTML: use HTML for layout; plain text newlines are auto converted to <br>.',
+    {
+      id: z.string().describe('Message ID to forward'),
+      to: z.array(z.string().email()).optional().describe('Optional recipients to prefill on the forward draft'),
+      comment: z.string().optional().describe('Optional message to add above the forwarded content. HTML preferred; plain text newlines are auto converted to <br>.'),
+    },
+    async ({ id, to, comment }) => {
+      const draft = await createForwardDraft(id, comment ?? '', to);
+      return {
+        content: [{
+          type: 'text',
+          text: `Forward draft created and saved to Drafts.\nID: ${draft.Id}\nSubject: ${draft.Subject}\n\nReview, set or confirm recipients, then send with outlook_send_draft (id above).`,
+        }],
+      };
     },
   );
 
@@ -237,7 +297,7 @@ export function registerMailTools(server: McpServer): void {
     {
       id: z.string().describe('Message ID to forward'),
       to: z.array(z.string().email()).describe('Forward to these addresses'),
-      comment: z.string().optional().describe('Optional message to include with the forward'),
+      comment: z.string().optional().describe('Optional message to include with the forward. Rendered as HTML: use HTML for layout, or plain text whose newlines are auto converted to <br>.'),
     },
     async ({ id, to, comment }) => {
       await forwardMessage(id, to, comment);
@@ -373,6 +433,144 @@ export function registerMailTools(server: McpServer): void {
         .map(f => `${f.DisplayName} (ID: ${f.Id}) | Unread: ${f.UnreadItemCount} / ${f.TotalItemCount}`)
         .join('\n');
       return { content: [{ type: 'text', text: text || 'No folders found.' }] };
+    },
+  );
+
+  // ── outlook_update_draft ─────────────────────────────────────────────────
+  server.tool(
+    'outlook_update_draft',
+    'Edit an existing draft: change its subject, recipients, body, or importance. Useful for tweaking a reply or forward draft before sending it with outlook_send_draft. Only the fields you pass are changed. Body follows the same HTML rules as sending.',
+    {
+      id: z.string().describe('Draft message ID'),
+      subject: z.string().optional().describe('New subject'),
+      body: z.string().optional().describe('New body. Prefer HTML; plain text newlines auto convert to <br>.'),
+      to: z.array(z.string().email()).optional().describe('Replace the To recipients'),
+      cc: z.array(z.string().email()).optional().describe('Replace the CC recipients'),
+      bcc: z.array(z.string().email()).optional().describe('Replace the BCC recipients'),
+      importance: z.enum(['Low', 'Normal', 'High']).optional(),
+    },
+    async ({ id, subject, body, to, cc, bcc, importance }) => {
+      const draft = await updateDraft(id, { subject, body, to, cc, bcc, importance });
+      return { content: [{ type: 'text', text: `Draft updated.\nID: ${draft.Id}\nSubject: ${draft.Subject}` }] };
+    },
+  );
+
+  // ── outlook_add_attachment ───────────────────────────────────────────────
+  server.tool(
+    'outlook_add_attachment',
+    'Attach a local file to an existing draft (including a reply or forward draft). Read the file from disk and add it. Combine with outlook_create_reply_draft or outlook_create_draft, then outlook_send_draft.',
+    {
+      message_id: z.string().describe('Draft message ID to attach to'),
+      file_path: z.string().describe('Local file path to attach'),
+    },
+    async ({ message_id, file_path }) => {
+      const attachment = await fileToAttachment(file_path);
+      await addAttachment(message_id, attachment);
+      return { content: [{ type: 'text', text: `Attached ${attachment.name} to draft ${message_id}.` }] };
+    },
+  );
+
+  // ── outlook_list_attachments ─────────────────────────────────────────────
+  server.tool(
+    'outlook_list_attachments',
+    'List the attachments on an email (name, type, size, and attachment ID for downloading).',
+    {
+      message_id: z.string().describe('Message ID'),
+    },
+    async ({ message_id }) => {
+      const items = await listAttachments(message_id);
+      if (items.length === 0) return { content: [{ type: 'text', text: 'No attachments.' }] };
+      const text = items.map((a: Attachment) => `- ${a.Name} (${a.ContentType}, ${Math.round(a.Size / 1024)}KB)${a.IsInline ? ' [inline]' : ''}\n  ID: ${a.Id}`).join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  // ── outlook_save_attachment ──────────────────────────────────────────────
+  server.tool(
+    'outlook_save_attachment',
+    'Download an email attachment and save it to a local file path. Use outlook_list_attachments first to get the attachment ID.',
+    {
+      message_id: z.string().describe('Message ID the attachment belongs to'),
+      attachment_id: z.string().describe('Attachment ID (from outlook_list_attachments)'),
+      output_path: z.string().describe('Local file path to write the attachment to'),
+    },
+    async ({ message_id, attachment_id, output_path }) => {
+      const att = await getAttachmentContent(message_id, attachment_id);
+      if (!att.ContentBytes) {
+        return { content: [{ type: 'text', text: `Attachment ${att.Name} has no downloadable content (it may be an item or reference attachment).` }] };
+      }
+      await writeFile(output_path, Buffer.from(att.ContentBytes, 'base64'));
+      return { content: [{ type: 'text', text: `Saved ${att.Name} (${Math.round(att.Size / 1024)}KB) to ${output_path}.` }] };
+    },
+  );
+
+  // ── outlook_get_conversation ─────────────────────────────────────────────
+  server.tool(
+    'outlook_get_conversation',
+    'Get every message in a conversation/thread, oldest first, by conversation ID. The conversation ID comes from any message in the thread (outlook_get_email / outlook_list_emails). Useful for reading a whole back-and-forth before replying.',
+    {
+      conversation_id: z.string().describe('Conversation ID shared by all messages in the thread'),
+      top: z.number().int().min(1).max(100).optional().describe('Max messages to return (default 50)'),
+    },
+    async ({ conversation_id, top }) => {
+      const messages = await getConversation(conversation_id, top ?? 50);
+      return { content: [{ type: 'text', text: formatMessageList(messages) }] };
+    },
+  );
+
+  // ── outlook_set_categories ───────────────────────────────────────────────
+  server.tool(
+    'outlook_set_categories',
+    'Set the colour categories (labels) on an email. This replaces the existing categories with the list you pass; pass an empty list to clear them.',
+    {
+      message_id: z.string().describe('Message ID'),
+      categories: z.array(z.string()).describe('Category names to set (replaces existing). Empty list clears them.'),
+    },
+    async ({ message_id, categories }) => {
+      await setCategories(message_id, categories);
+      const text = categories.length ? `Categories set: ${categories.join(', ')}.` : 'Categories cleared.';
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  // ── outlook_create_folder ────────────────────────────────────────────────
+  server.tool(
+    'outlook_create_folder',
+    'Create a new mail folder, optionally nested under a parent folder.',
+    {
+      name: z.string().describe('Folder display name'),
+      parent_folder_id: z.string().optional().describe('Parent folder ID to nest under (defaults to top level)'),
+    },
+    async ({ name, parent_folder_id }) => {
+      const folder = await createFolder(name, parent_folder_id);
+      return { content: [{ type: 'text', text: `Folder created.\nID: ${folder.Id}\nName: ${folder.DisplayName}` }] };
+    },
+  );
+
+  // ── outlook_rename_folder ────────────────────────────────────────────────
+  server.tool(
+    'outlook_rename_folder',
+    'Rename an existing mail folder.',
+    {
+      id: z.string().describe('Folder ID to rename'),
+      name: z.string().describe('New folder display name'),
+    },
+    async ({ id, name }) => {
+      const folder = await renameFolder(id, name);
+      return { content: [{ type: 'text', text: `Folder renamed to ${folder.DisplayName}.` }] };
+    },
+  );
+
+  // ── outlook_delete_folder ────────────────────────────────────────────────
+  server.tool(
+    'outlook_delete_folder',
+    'Delete a mail folder and everything in it. This is destructive: confirm with the user and double check the folder ID before calling.',
+    {
+      id: z.string().describe('Folder ID to delete'),
+    },
+    async ({ id }) => {
+      await deleteFolder(id);
+      return { content: [{ type: 'text', text: 'Folder deleted.' }] };
     },
   );
 }
