@@ -7,7 +7,7 @@
 
 MCP server for Microsoft Outlook Web. No app registration required.
 
-Give any MCP client (Claude, Cursor, Devin, ...) read and write access to your Outlook mail, calendar, contacts, and the org directory. It works by reusing your existing Outlook Web session, the same way [msteams-mcp](https://github.com/m0nkmaster/msteams-mcp) reuses the Teams web session: you sign in once in a browser, then tokens are cached and refreshed automatically.
+Give any MCP client (Claude, Cursor, Devin, ...) read and write access to your Outlook mail, calendar, contacts, and the org directory. It works by reusing your existing Outlook Web session, the same way [@shayanline/msteams-mcp](https://github.com/shayanline/msteams-mcp) reuses the Teams web session: you sign in once in a browser, then tokens are cached and refreshed automatically.
 
 ## Why
 
