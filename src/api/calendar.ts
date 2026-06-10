@@ -39,6 +39,9 @@ export interface CalendarEvent {
   Importance?: string;
   Sensitivity?: string;
   ShowAs?: string;
+  ReminderMinutesBeforeStart?: number;
+  IsReminderOn?: boolean;
+  Categories?: string[];
   WebLink?: string;
   ResponseStatus?: { Response: string; Time: string };
 }
@@ -49,6 +52,117 @@ export interface Calendar {
   Color?: string;
   IsDefaultCalendar?: boolean;
   CanEdit?: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recurrence
+//
+// Maps a clean, friendly input shape to the OWA REST v2 `Recurrence` property
+// (a PatternedRecurrence: Pattern + Range), the same model Microsoft Graph
+// exposes as `patternedRecurrence`. Input values use Graph-style camelCase
+// (e.g. 'absoluteMonthly', 'monday', 'first') and are translated to the
+// PascalCase enum values OWA expects ('AbsoluteMonthly', 'Monday', 'First').
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RecurrencePatternType =
+  | 'daily'
+  | 'weekly'
+  | 'absoluteMonthly'
+  | 'relativeMonthly'
+  | 'absoluteYearly'
+  | 'relativeYearly';
+
+export type WeekIndex = 'first' | 'second' | 'third' | 'fourth' | 'last';
+
+export type DayOfWeek =
+  | 'sunday' | 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday';
+
+export type RecurrenceRangeType = 'endDate' | 'noEnd' | 'numbered';
+
+export interface RecurrenceInput {
+  /** How often the event repeats. */
+  pattern: RecurrencePatternType;
+  /** Units between occurrences (e.g. every 3 weeks). Default 1. */
+  interval?: number;
+  /** Days the event falls on. Required for weekly, relativeMonthly, relativeYearly. */
+  daysOfWeek?: DayOfWeek[];
+  /** Day of the month (1-31). Required for absoluteMonthly and absoluteYearly. */
+  dayOfMonth?: number;
+  /** Month (1-12). Required for absoluteYearly and relativeYearly. */
+  month?: number;
+  /** Which occurrence of daysOfWeek in the month (e.g. 'last' Friday). Used by relative patterns. */
+  index?: WeekIndex;
+  /** First day of the week for weekly patterns (default 'sunday'). */
+  firstDayOfWeek?: DayOfWeek;
+  /** When the series stops. */
+  range: {
+    type: RecurrenceRangeType;
+    /** Series start date (YYYY-MM-DD). Defaults to the event's start date. */
+    startDate?: string;
+    /** Last date of the series (YYYY-MM-DD). Required when type is 'endDate'. */
+    endDate?: string;
+    /** Total number of occurrences. Required when type is 'numbered'. */
+    numberOfOccurrences?: number;
+    /** Time zone the recurrence runs in. Defaults to the event time zone. */
+    timeZone?: string;
+  };
+}
+
+const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * Validate a RecurrenceInput and translate it to the OWA `Recurrence` payload.
+ * `eventStart` (the event's ISO start) seeds the range start date when omitted.
+ */
+export function buildRecurrence(
+  input: RecurrenceInput,
+  eventStart: string,
+  defaultTimeZone: string,
+): Record<string, unknown> {
+  const pattern: Record<string, unknown> = {
+    Type: capitalise(input.pattern),
+    Interval: input.interval ?? 1,
+  };
+
+  const needsDays = ['weekly', 'relativeMonthly', 'relativeYearly'].includes(input.pattern);
+  if (needsDays && !input.daysOfWeek?.length) {
+    throw new Error(`Recurrence pattern '${input.pattern}' requires daysOfWeek.`);
+  }
+  if ((input.pattern === 'absoluteMonthly' || input.pattern === 'absoluteYearly') && input.dayOfMonth == null) {
+    throw new Error(`Recurrence pattern '${input.pattern}' requires dayOfMonth.`);
+  }
+  if ((input.pattern === 'absoluteYearly' || input.pattern === 'relativeYearly') && input.month == null) {
+    throw new Error(`Recurrence pattern '${input.pattern}' requires month (1-12).`);
+  }
+
+  if (input.daysOfWeek?.length) pattern.DaysOfWeek = input.daysOfWeek.map(capitalise);
+  if (input.dayOfMonth != null) pattern.DayOfMonth = input.dayOfMonth;
+  if (input.month != null) pattern.Month = input.month;
+  if (input.index) pattern.Index = capitalise(input.index);
+  if (input.pattern === 'weekly') pattern.FirstDayOfWeek = capitalise(input.firstDayOfWeek ?? 'sunday');
+
+  const r = input.range;
+  if (r.type === 'endDate' && !r.endDate) {
+    throw new Error("Recurrence range type 'endDate' requires endDate (YYYY-MM-DD).");
+  }
+  if (r.type === 'numbered' && r.numberOfOccurrences == null) {
+    throw new Error("Recurrence range type 'numbered' requires numberOfOccurrences.");
+  }
+
+  const startDate = r.startDate ?? eventStart.slice(0, 10);
+  if (!startDate) {
+    throw new Error('Recurrence requires a range startDate (or an event start to derive it from).');
+  }
+
+  const range: Record<string, unknown> = {
+    Type: capitalise(r.type),
+    StartDate: startDate,
+    RecurrenceTimeZone: r.timeZone ?? defaultTimeZone,
+  };
+  if (r.endDate) range.EndDate = r.endDate;
+  if (r.numberOfOccurrences != null) range.NumberOfOccurrences = r.numberOfOccurrences;
+
+  return { Pattern: pattern, Range: range };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,15 +178,22 @@ export interface ListEventsOptions {
   select?: string[];
 }
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
 export async function listEvents(opts: ListEventsOptions = {}): Promise<CalendarEvent[]> {
+  // calendarView (rather than /events) scopes results to [startDateTime, endDateTime]
+  // and expands recurring series into individual instances within the window.
   const path = opts.calendarId ? `/calendars/${opts.calendarId}/calendarview` : '/calendarview';
 
-  const now = new Date();
-  const weekOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  // Anchor the window on the start when given, so a future start without an end
+  // produces a forward week rather than an empty/backwards window ending "now".
+  const start = opts.startDateTime ? new Date(opts.startDateTime) : new Date();
+  const startISO = opts.startDateTime ?? start.toISOString();
+  const endISO = opts.endDateTime ?? new Date(start.getTime() + WEEK_MS).toISOString();
 
   const params: Record<string, string> = {
-    startDateTime: opts.startDateTime ?? now.toISOString(),
-    endDateTime: opts.endDateTime ?? weekOut.toISOString(),
+    startDateTime: startISO,
+    endDateTime: endISO,
     '$top': String(opts.top ?? 50),
     '$orderby': 'start/dateTime asc',
     '$select': (opts.select ?? [
@@ -100,6 +221,8 @@ export async function getEvent(id: string): Promise<CalendarEvent> {
 // Create event
 // ─────────────────────────────────────────────────────────────────────────────
 
+export type ShowAs = 'free' | 'tentative' | 'busy' | 'oof' | 'workingElsewhere';
+
 export interface CreateEventOptions {
   subject: string;
   body?: string;
@@ -112,6 +235,34 @@ export interface CreateEventOptions {
   isOnlineMeeting?: boolean;
   importance?: 'Low' | 'Normal' | 'High';
   isAllDay?: boolean;
+  /** Make the event a repeating series. See RecurrenceInput. */
+  recurrence?: RecurrenceInput;
+  /**
+   * Minutes before the start to fire the reminder. Note: Graph/OWA support only
+   * ONE reminder per event, so a single value is all that can be set (you cannot
+   * have, say, both a one-month and a one-week reminder on the same event).
+   */
+  reminderMinutesBeforeStart?: number;
+  /** Whether the reminder is enabled. */
+  isReminderOn?: boolean;
+  /** Free/busy status to show for the event. */
+  showAs?: ShowAs;
+  /** Colour categories (labels) to tag the event with. */
+  categories?: string[];
+  /** Mark the event private (maps to Sensitivity 'Private'); otherwise 'Normal'. */
+  isPrivate?: boolean;
+}
+
+/** Shared builder for the create/update payload fields that both endpoints accept. */
+function buildEventExtras(opts: Partial<CreateEventOptions>, tz: string, eventStart?: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (opts.recurrence) out.Recurrence = buildRecurrence(opts.recurrence, eventStart ?? opts.start ?? '', tz);
+  if (opts.reminderMinutesBeforeStart != null) out.ReminderMinutesBeforeStart = opts.reminderMinutesBeforeStart;
+  if (opts.isReminderOn != null) out.IsReminderOn = opts.isReminderOn;
+  if (opts.showAs) out.ShowAs = capitalise(opts.showAs);
+  if (opts.categories) out.Categories = opts.categories;
+  if (opts.isPrivate != null) out.Sensitivity = opts.isPrivate ? 'Private' : 'Normal';
+  return out;
 }
 
 export async function createEvent(opts: CreateEventOptions): Promise<CalendarEvent> {
@@ -131,6 +282,7 @@ export async function createEvent(opts: CreateEventOptions): Promise<CalendarEve
     IsOnlineMeeting: opts.isOnlineMeeting ?? false,
     Importance: opts.importance ?? 'Normal',
     IsAllDay: opts.isAllDay ?? false,
+    ...buildEventExtras(opts, tz, opts.start),
   });
 }
 
@@ -150,6 +302,7 @@ export async function updateEvent(id: string, updates: Partial<CreateEventOption
   if (updates.end !== undefined) body.End = { DateTime: updates.end, TimeZone: tz };
   if (updates.location !== undefined) body.Location = { DisplayName: updates.location };
   if (updates.isOnlineMeeting !== undefined) body.IsOnlineMeeting = updates.isOnlineMeeting;
+  Object.assign(body, buildEventExtras(updates, tz, updates.start));
 
   return owaPatch<CalendarEvent>(`/events/${id}`, body);
 }

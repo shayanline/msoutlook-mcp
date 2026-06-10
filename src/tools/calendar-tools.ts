@@ -20,7 +20,53 @@ import {
   type CalendarEvent,
   type EventResponse,
   type ScheduleInformation,
+  type RecurrenceInput,
 } from '../api/calendar.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared schemas
+// ─────────────────────────────────────────────────────────────────────────────
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+
+const recurrenceSchema = z.object({
+  pattern: z.enum(['daily', 'weekly', 'absoluteMonthly', 'relativeMonthly', 'absoluteYearly', 'relativeYearly'])
+    .describe('Repeat frequency. weekly needs days_of_week; absoluteMonthly/absoluteYearly need day_of_month; relativeMonthly/relativeYearly need days_of_week (+index); yearly patterns need month.'),
+  interval: z.number().int().min(1).optional().describe('Units between occurrences, e.g. 3 = every 3 weeks/months (default 1)'),
+  days_of_week: z.array(z.enum(WEEKDAYS)).optional().describe('Days the event falls on (e.g. ["monday"]). Required for weekly/relativeMonthly/relativeYearly'),
+  day_of_month: z.number().int().min(1).max(31).optional().describe('Day of month (1-31). Required for absoluteMonthly/absoluteYearly'),
+  month: z.number().int().min(1).max(12).optional().describe('Month 1-12. Required for absoluteYearly/relativeYearly'),
+  index: z.enum(['first', 'second', 'third', 'fourth', 'last']).optional().describe('Which occurrence in the month, e.g. "last" Friday. Used by relative patterns'),
+  first_day_of_week: z.enum(WEEKDAYS).optional().describe('First day of week for weekly patterns (default sunday)'),
+  range: z.object({
+    type: z.enum(['endDate', 'numbered', 'noEnd']).describe('How the series ends'),
+    start_date: z.string().optional().describe('Series start date YYYY-MM-DD (defaults to the event start date)'),
+    end_date: z.string().optional().describe('Last date YYYY-MM-DD. Required when type is endDate'),
+    count: z.number().int().min(1).optional().describe('Total number of occurrences. Required when type is numbered'),
+    time_zone: z.string().optional().describe('Recurrence time zone (defaults to the event time zone)'),
+  }).describe('When the recurring series stops'),
+}).describe('Make the event a repeating series (maps to Microsoft Graph patternedRecurrence).');
+
+type RecurrenceArg = z.infer<typeof recurrenceSchema>;
+
+function toRecurrenceInput(r: RecurrenceArg): RecurrenceInput {
+  return {
+    pattern: r.pattern,
+    interval: r.interval,
+    daysOfWeek: r.days_of_week,
+    dayOfMonth: r.day_of_month,
+    month: r.month,
+    index: r.index,
+    firstDayOfWeek: r.first_day_of_week,
+    range: {
+      type: r.range.type,
+      startDate: r.range.start_date,
+      endDate: r.range.end_date,
+      numberOfOccurrences: r.range.count,
+      timeZone: r.range.time_zone,
+    },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -43,6 +89,10 @@ function formatEvent(e: CalendarEvent, full = false): string {
     organizer ? `Organizer: ${organizer}` : '',
     attendeeCount > 0 ? `Attendees: ${attendeeCount}` : '',
     e.IsOnlineMeeting ? `Online Meeting: ${e.OnlineMeetingUrl ?? 'Yes'}` : '',
+    e.Recurrence ? 'Recurring: yes' : '',
+    e.IsReminderOn ? `Reminder: ${e.ReminderMinutesBeforeStart ?? 0} min before` : '',
+    e.ShowAs ? `Show as: ${e.ShowAs}` : '',
+    e.Categories?.length ? `Categories: ${e.Categories.join(', ')}` : '',
     e.ResponseStatus ? `My Response: ${e.ResponseStatus.Response}` : '',
     e.WebLink ? `Web URL: ${e.WebLink}` : '',
   ].filter(Boolean);
@@ -143,6 +193,12 @@ export function registerCalendarTools(server: McpServer): void {
       is_online_meeting: z.boolean().optional().describe('Add a Teams/online meeting link (default: false)'),
       is_all_day: z.boolean().optional().describe('All-day event (default: false)'),
       importance: z.enum(['Low', 'Normal', 'High']).optional(),
+      recurrence: recurrenceSchema.optional(),
+      reminder_minutes_before_start: z.number().int().min(0).optional().describe('Minutes before start to fire the reminder. Graph allows only ONE reminder per event'),
+      is_reminder_on: z.boolean().optional().describe('Whether the reminder is enabled'),
+      show_as: z.enum(['free', 'tentative', 'busy', 'oof', 'workingElsewhere']).optional().describe('Free/busy status shown for the event'),
+      categories: z.array(z.string()).optional().describe('Colour category labels to tag the event with'),
+      is_private: z.boolean().optional().describe('Mark the event private (sensitivity)'),
     },
     async (params) => {
       const event = await createEvent({
@@ -156,6 +212,12 @@ export function registerCalendarTools(server: McpServer): void {
         isOnlineMeeting: params.is_online_meeting,
         isAllDay: params.is_all_day,
         importance: params.importance,
+        recurrence: params.recurrence ? toRecurrenceInput(params.recurrence) : undefined,
+        reminderMinutesBeforeStart: params.reminder_minutes_before_start,
+        isReminderOn: params.is_reminder_on,
+        showAs: params.show_as,
+        categories: params.categories,
+        isPrivate: params.is_private,
       });
       return {
         content: [{
@@ -178,6 +240,12 @@ export function registerCalendarTools(server: McpServer): void {
       time_zone: z.string().optional(),
       location: z.string().optional(),
       body: z.string().optional(),
+      recurrence: recurrenceSchema.optional().describe('Turn the event into a repeating series. Provide range.start_date if the event start is not also being set'),
+      reminder_minutes_before_start: z.number().int().min(0).optional().describe('Minutes before start to fire the reminder. Graph allows only ONE reminder per event'),
+      is_reminder_on: z.boolean().optional().describe('Whether the reminder is enabled'),
+      show_as: z.enum(['free', 'tentative', 'busy', 'oof', 'workingElsewhere']).optional().describe('Free/busy status shown for the event'),
+      categories: z.array(z.string()).optional().describe('Colour category labels to tag the event with'),
+      is_private: z.boolean().optional().describe('Mark the event private (sensitivity)'),
     },
     async ({ id, ...updates }) => {
       const event = await updateEvent(id, {
@@ -187,6 +255,12 @@ export function registerCalendarTools(server: McpServer): void {
         timeZone: updates.time_zone,
         location: updates.location,
         body: updates.body,
+        recurrence: updates.recurrence ? toRecurrenceInput(updates.recurrence) : undefined,
+        reminderMinutesBeforeStart: updates.reminder_minutes_before_start,
+        isReminderOn: updates.is_reminder_on,
+        showAs: updates.show_as,
+        categories: updates.categories,
+        isPrivate: updates.is_private,
       });
       return {
         content: [{
