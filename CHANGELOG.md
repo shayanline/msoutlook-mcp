@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
 ### Added
 - Recurring events: `outlook_create_event` and `outlook_update_event` take an optional `recurrence` object (maps to Graph `patternedRecurrence`) covering daily, weekly, absolute and relative monthly and yearly patterns, intervals, and `endDate`, `numbered`, or `noEnd` ranges with a recurrence time zone.
 - Event reminders: `reminder_minutes_before_start` and `is_reminder_on` on create and update (Graph supports a single reminder per event).
@@ -36,6 +38,7 @@ All notable changes to this project are documented here. The format is based on
 
 See the [GitHub releases](https://github.com/shayanline/msoutlook-mcp/releases) for earlier history.
 
-[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.1.3...v0.3.0
