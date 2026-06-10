@@ -11,6 +11,7 @@ import { owaGet, owaPost, owaPatch, owaDelete } from './client.js';
 import {
   listEvents, getEvent, createEvent, updateEvent, deleteEvent, respondToEvent,
   searchEvents, listCalendars, getSchedule, findMeetingTimes, cancelEvent, forwardEvent,
+  buildRecurrence,
 } from './calendar.js';
 
 const mGet = vi.mocked(owaGet);
@@ -44,6 +45,69 @@ describe('listEvents', () => {
     expect(params['$top']).toBe('5');
     expect(params['$select']).toBe('Id');
     expect(params['$filter']).toBe('x eq 1');
+  });
+
+  it('anchors the default end window on the given start (forward, not "now")', async () => {
+    mGet.mockResolvedValue({ value: [] });
+    await listEvents({ startDateTime: '2030-01-01T00:00:00.000Z' });
+    const [, params] = mGet.mock.calls[0] as [string, Record<string, string>];
+    expect(params.startDateTime).toBe('2030-01-01T00:00:00.000Z');
+    // end defaults to start + 7 days, not the current time
+    expect(params.endDateTime).toBe('2030-01-08T00:00:00.000Z');
+  });
+});
+
+describe('buildRecurrence', () => {
+  it('builds a weekly pattern with days, interval and end date', () => {
+    const rec = buildRecurrence(
+      {
+        pattern: 'weekly',
+        interval: 2,
+        daysOfWeek: ['monday', 'thursday'],
+        range: { type: 'endDate', endDate: '2026-12-31', timeZone: 'Europe/London' },
+      },
+      '2026-06-10T09:00:00',
+      'UTC',
+    );
+    expect(rec).toEqual({
+      Pattern: { Type: 'Weekly', Interval: 2, DaysOfWeek: ['Monday', 'Thursday'], FirstDayOfWeek: 'Sunday' },
+      Range: { Type: 'EndDate', StartDate: '2026-06-10', RecurrenceTimeZone: 'Europe/London', EndDate: '2026-12-31' },
+    });
+  });
+
+  it('builds a relativeMonthly last-Friday numbered pattern, deriving start from the event', () => {
+    const rec = buildRecurrence(
+      { pattern: 'relativeMonthly', daysOfWeek: ['friday'], index: 'last', range: { type: 'numbered', numberOfOccurrences: 6 } },
+      '2026-06-26T15:00:00',
+      'Europe/London',
+    );
+    expect(rec.Pattern).toEqual({ Type: 'RelativeMonthly', Interval: 1, DaysOfWeek: ['Friday'], Index: 'Last' });
+    expect(rec.Range).toEqual({ Type: 'Numbered', StartDate: '2026-06-26', RecurrenceTimeZone: 'Europe/London', NumberOfOccurrences: 6 });
+  });
+
+  it('builds an absoluteMonthly noEnd pattern', () => {
+    const rec = buildRecurrence(
+      { pattern: 'absoluteMonthly', interval: 3, dayOfMonth: 15, range: { type: 'noEnd' } },
+      '2026-06-15T09:00:00',
+      'UTC',
+    );
+    expect(rec.Pattern).toEqual({ Type: 'AbsoluteMonthly', Interval: 3, DayOfMonth: 15 });
+    expect((rec.Range as any).Type).toBe('NoEnd');
+  });
+
+  it('validates required fields', () => {
+    expect(() => buildRecurrence({ pattern: 'weekly', range: { type: 'noEnd' } }, '2026-06-10', 'UTC'))
+      .toThrow(/requires daysOfWeek/);
+    expect(() => buildRecurrence({ pattern: 'absoluteMonthly', range: { type: 'noEnd' } }, '2026-06-10', 'UTC'))
+      .toThrow(/requires dayOfMonth/);
+    expect(() => buildRecurrence({ pattern: 'absoluteYearly', dayOfMonth: 1, range: { type: 'noEnd' } }, '2026-06-10', 'UTC'))
+      .toThrow(/requires month/);
+    expect(() => buildRecurrence({ pattern: 'daily', range: { type: 'endDate' } }, '2026-06-10', 'UTC'))
+      .toThrow(/requires endDate/);
+    expect(() => buildRecurrence({ pattern: 'daily', range: { type: 'numbered' } }, '2026-06-10', 'UTC'))
+      .toThrow(/requires numberOfOccurrences/);
+    expect(() => buildRecurrence({ pattern: 'daily', range: { type: 'noEnd' } }, '', 'UTC'))
+      .toThrow(/requires a range startDate/);
   });
 });
 
@@ -88,6 +152,34 @@ describe('createEvent', () => {
     expect(body.IsOnlineMeeting).toBe(true);
     expect(body.IsAllDay).toBe(true);
   });
+
+  it('maps recurrence, reminder, showAs, categories and private flag', async () => {
+    mPost.mockResolvedValue({ Id: 'e3' });
+    await createEvent({
+      subject: 'Planning', start: '2026-06-10T09:00:00', end: '2026-06-10T09:30:00', timeZone: 'Europe/London',
+      recurrence: { pattern: 'weekly', daysOfWeek: ['monday'], range: { type: 'noEnd' } },
+      reminderMinutesBeforeStart: 15, isReminderOn: true,
+      showAs: 'busy', categories: ['Planning'], isPrivate: true,
+    });
+    const body = mPost.mock.calls[0][1] as any;
+    expect(body.Recurrence.Pattern.Type).toBe('Weekly');
+    expect(body.Recurrence.Range).toMatchObject({ Type: 'NoEnd', StartDate: '2026-06-10', RecurrenceTimeZone: 'Europe/London' });
+    expect(body.ReminderMinutesBeforeStart).toBe(15);
+    expect(body.IsReminderOn).toBe(true);
+    expect(body.ShowAs).toBe('Busy');
+    expect(body.Categories).toEqual(['Planning']);
+    expect(body.Sensitivity).toBe('Private');
+  });
+
+  it('omits extras when not provided and sets Normal sensitivity for isPrivate false', async () => {
+    mPost.mockResolvedValue({ Id: 'e4' });
+    await createEvent({ subject: 'S', start: 's', end: 'e', isPrivate: false });
+    const body = mPost.mock.calls[0][1] as any;
+    expect(body.Recurrence).toBeUndefined();
+    expect(body.ReminderMinutesBeforeStart).toBeUndefined();
+    expect(body.ShowAs).toBeUndefined();
+    expect(body.Sensitivity).toBe('Normal');
+  });
 });
 
 describe('updateEvent', () => {
@@ -117,6 +209,19 @@ describe('updateEvent', () => {
     mPatch.mockResolvedValue({ Id: 'e1' });
     await updateEvent('e1', {});
     expect(mPatch).toHaveBeenCalledWith('/events/e1', {});
+  });
+  it('patches recurrence and reminder, deriving recurrence start from new start', async () => {
+    mPatch.mockResolvedValue({ Id: 'e1' });
+    await updateEvent('e1', {
+      start: '2026-07-01T10:00:00', timeZone: 'Europe/London',
+      recurrence: { pattern: 'daily', interval: 1, range: { type: 'numbered', numberOfOccurrences: 5 } },
+      reminderMinutesBeforeStart: 30, isReminderOn: true,
+    });
+    const body = mPatch.mock.calls[0][1] as any;
+    expect(body.Recurrence.Pattern).toEqual({ Type: 'Daily', Interval: 1 });
+    expect(body.Recurrence.Range.StartDate).toBe('2026-07-01');
+    expect(body.ReminderMinutesBeforeStart).toBe(30);
+    expect(body.IsReminderOn).toBe(true);
   });
 });
 

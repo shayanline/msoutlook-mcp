@@ -72,11 +72,38 @@ describe('create/update/delete/respond', () => {
     expect(text(r)).toContain('Event created.');
     expect(cal.createEvent).toHaveBeenCalled();
   });
+  it('create_event maps recurrence and reminder args to camelCase options', async () => {
+    vi.mocked(cal.createEvent).mockResolvedValue({ Id: 'e', Subject: 's', Start: { DateTime: 'd' } } as any);
+    await tools.get('outlook_create_event')!.handler({
+      subject: 's', start: '2026-06-10T09:00:00', end: '2026-06-10T09:30:00', time_zone: 'Europe/London',
+      recurrence: {
+        pattern: 'relativeMonthly', days_of_week: ['friday'], index: 'last',
+        range: { type: 'numbered', count: 6, start_date: '2026-06-26', time_zone: 'Europe/London' },
+      },
+      reminder_minutes_before_start: 15, is_reminder_on: true,
+      show_as: 'busy', categories: ['Planning'], is_private: true,
+    });
+    const opts = vi.mocked(cal.createEvent).mock.calls[0][0] as any;
+    expect(opts.recurrence).toEqual({
+      pattern: 'relativeMonthly', interval: undefined, daysOfWeek: ['friday'], dayOfMonth: undefined,
+      month: undefined, index: 'last', firstDayOfWeek: undefined,
+      range: { type: 'numbered', startDate: '2026-06-26', endDate: undefined, numberOfOccurrences: 6, timeZone: 'Europe/London' },
+    });
+    expect(opts.reminderMinutesBeforeStart).toBe(15);
+    expect(opts.isReminderOn).toBe(true);
+    expect(opts.showAs).toBe('busy');
+    expect(opts.categories).toEqual(['Planning']);
+    expect(opts.isPrivate).toBe(true);
+  });
   it('update_event', async () => {
     vi.mocked(cal.updateEvent).mockResolvedValue({ Id: 'e', Subject: 's' } as any);
     const r = await tools.get('outlook_update_event')!.handler({ id: 'e', subject: 's', start: 'a', end: 'b', time_zone: 'UTC', location: 'L', body: 'B' });
     expect(text(r)).toContain('Event updated.');
-    expect(cal.updateEvent).toHaveBeenCalledWith('e', { subject: 's', start: 'a', end: 'b', timeZone: 'UTC', location: 'L', body: 'B' });
+    expect(cal.updateEvent).toHaveBeenCalledWith('e', {
+      subject: 's', start: 'a', end: 'b', timeZone: 'UTC', location: 'L', body: 'B',
+      recurrence: undefined, reminderMinutesBeforeStart: undefined, isReminderOn: undefined,
+      showAs: undefined, categories: undefined, isPrivate: undefined,
+    });
   });
   it('delete_event', async () => {
     vi.mocked(cal.deleteEvent).mockResolvedValue(undefined as any);
