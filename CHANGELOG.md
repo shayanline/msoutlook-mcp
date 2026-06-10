@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Recurring events: `outlook_create_event` and `outlook_update_event` take an optional `recurrence` object (maps to Graph `patternedRecurrence`) covering daily, weekly, absolute and relative monthly and yearly patterns, intervals, and `endDate`, `numbered`, or `noEnd` ranges with a recurrence time zone.
+- Event reminders: `reminder_minutes_before_start` and `is_reminder_on` on create and update (Graph supports a single reminder per event).
+- Event metadata on create and update: `show_as`, `categories`, and `is_private` (sensitivity), useful when mirroring personal events into a work calendar.
+
+### Fixed
+- `outlook_list_events` now anchors the default end of the window on the given start, so a future `start_date` without an `end_date` returns a forward week instead of an empty window ending "now". Listing continues to use `calendarView`, which scopes results to the window and expands recurring series into instances.
+
 ## [0.3.1] - 2026-06-04
 
 ### Changed
