@@ -1,16 +1,18 @@
 /**
  * Extract MSAL tokens from Outlook Web App's localStorage.
  *
- * OWA uses MSAL v3 and stores access tokens, refresh tokens, and ID tokens
+ * OWA uses MSAL and stores access tokens, refresh tokens, and ID tokens
  * in localStorage under keys like:
  *   msal.3|{accountId}|login.windows.net|accesstoken|{clientId}|{tenantId}|{scopes}
  *   msal.3|{accountId}|login.windows.net|refreshtoken|{clientId}|||
  *
- * This mirrors how msteams-mcp extracts Teams tokens, adapted for OWA.
+ * MSAL browser v4+ may encrypt these values ({id, nonce, data}) unless KMSI
+ * was selected. Pass Playwright cookies so encrypted entries can be decrypted.
  */
 
 import { logger } from '../utils/logger.js';
 import { OWA_CLIENT_ID } from '../constants.js';
+import { resolveMsalLocalStorage, type PlaywrightCookie } from './msal-decrypt.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -80,17 +82,21 @@ function isJwt(value: string): boolean {
  * Extract all MSAL tokens from the Playwright storageState localStorage array.
  *
  * @param localStorage Array of {name, value} entries from Playwright storageState
+ * @param cookies Playwright cookies (needed to decrypt MSAL v4 encrypted cache)
  */
-export function extractTokensFromLocalStorage(
+export async function extractTokensFromLocalStorage(
   localStorage: Array<{ name: string; value: string }>,
-): ExtractedTokens | null {
+  cookies?: PlaywrightCookie[],
+): Promise<ExtractedTokens | null> {
+  const resolved = await resolveMsalLocalStorage(localStorage, cookies);
+
   let bestOwaToken: { token: string; expiry: Date } | null = null;
   let bestGraphToken: { token: string; expiry: Date } | null = null;
   let refreshToken: string | null = null;
   let tenantId: string | undefined;
   let upn: string | undefined;
 
-  for (const item of localStorage) {
+  for (const item of resolved) {
     const key = item.name;
     if (!key.startsWith('msal.')) continue;
 
@@ -162,6 +168,7 @@ export function extractTokensFromLocalStorage(
 
 /** Shape of the relevant parts of a Playwright storageState. */
 export interface StorageState {
+  cookies?: PlaywrightCookie[];
   origins?: Array<{
     origin: string;
     localStorage: Array<{ name: string; value: string }>;
