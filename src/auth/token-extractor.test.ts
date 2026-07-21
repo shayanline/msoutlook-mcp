@@ -150,6 +150,25 @@ describe('getOwaLocalStorage', () => {
     expect(getOwaLocalStorage(state)).toEqual([{ name: 'b', value: '2' }]);
   });
 
+  it('prefers outlook.cloud.microsoft over legacy office hosts', () => {
+    const state: StorageState = {
+      origins: [
+        { origin: 'https://outlook.office.com', localStorage: [{ name: 'legacy', value: '1' }] },
+        { origin: 'https://outlook.cloud.microsoft', localStorage: [{ name: 'cloud', value: '2' }] },
+      ],
+    };
+    expect(getOwaLocalStorage(state)).toEqual([{ name: 'cloud', value: '2' }]);
+  });
+
+  it('accepts outlook.office365.com as an OWA origin', () => {
+    const state: StorageState = {
+      origins: [
+        { origin: 'https://outlook.office365.com', localStorage: [{ name: 'c', value: '3' }] },
+      ],
+    };
+    expect(getOwaLocalStorage(state)).toEqual([{ name: 'c', value: '3' }]);
+  });
+
   it('returns null when no owa origin is present', () => {
     const state: StorageState = {
       origins: [{ origin: 'https://other.com', localStorage: [] }],

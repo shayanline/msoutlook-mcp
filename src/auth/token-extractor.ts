@@ -176,11 +176,28 @@ export interface StorageState {
 }
 
 /**
+ * Hostnames that may hold OWA MSAL localStorage.
+ * Prefer the unified cloud.microsoft app host; keep legacy office.com / office365.com
+ * for sessions that have not redirected yet (MC950871 / Microsoft 365 endpoint list).
+ */
+const OWA_STORAGE_HOSTS = [
+  'outlook.cloud.microsoft',
+  'outlook.office.com',
+  'outlook.office365.com',
+] as const;
+
+/**
  * Get the localStorage array from a Playwright storageState for the OWA origin.
  */
 export function getOwaLocalStorage(
   state: StorageState,
 ): Array<{ name: string; value: string }> | null {
-  const owaOrigin = state.origins?.find(o => o.origin.includes('outlook.office.com'));
-  return owaOrigin?.localStorage ?? null;
+  const origins = state.origins;
+  if (!origins?.length) return null;
+
+  for (const host of OWA_STORAGE_HOSTS) {
+    const match = origins.find(o => o.origin.includes(host));
+    if (match) return match.localStorage;
+  }
+  return null;
 }
