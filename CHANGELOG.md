@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-24
+
 ### Fixed
 - Login / token extraction against MSAL Browser v4 encrypted `localStorage` cache: decrypt entries using the `msal.cache.encryption` session cookie (AES-GCM + HKDF), matching `@azure/msal-browser`. Without this, OWA tokens appear present but extraction fails with `hasOwaToken: false` / `hasRefreshToken: false`.
 - Login against Outlook on the web’s unified host `outlook.cloud.microsoft` (Microsoft 365 Message Center MC950871 / cloud.microsoft domain migration): navigate to the new mail URL and read MSAL storage from that origin, while still accepting legacy `outlook.office.com` / `outlook.office365.com` sessions. REST calls remain on `outlook.office.com`.
@@ -42,7 +44,8 @@ All notable changes to this project are documented here. The format is based on
 
 See the [GitHub releases](https://github.com/shayanline/msoutlook-mcp/releases) for earlier history.
 
-[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.1.3...v0.3.0
