@@ -34,9 +34,26 @@ No Azure app registration. No admin consent. No client secrets. Your access is l
 
 ## Quick start
 
+The top-level key depends on your client. Most clients (Claude Desktop, Cursor, Windsurf) use `mcpServers`, while VS Code's `.vscode/mcp.json` uses `servers`. Copy the matching block below.
+
+**Claude Desktop, Cursor, Windsurf** (`mcpServers`):
+
 ```json
 {
   "mcpServers": {
+    "outlook": {
+      "command": "npx",
+      "args": ["-y", "msoutlook-mcp@latest"]
+    }
+  }
+}
+```
+
+**VS Code** (`.vscode/mcp.json`, uses `servers`):
+
+```json
+{
+  "servers": {
     "outlook": {
       "command": "npx",
       "args": ["-y", "msoutlook-mcp@latest"]
