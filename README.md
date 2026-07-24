@@ -36,7 +36,7 @@ No Azure app registration. No admin consent. No client secrets. Your access is l
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "outlook": {
       "command": "npx",
       "args": ["-y", "msoutlook-mcp@latest"]
