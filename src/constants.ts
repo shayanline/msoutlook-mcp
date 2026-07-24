@@ -22,13 +22,25 @@ export const OWA_SCOPE = 'https://outlook.office.com/.default';
 /** Microsoft Graph scope. */
 export const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 
-/** Outlook Web login URL. */
-export const OWA_URL = 'https://outlook.office.com/mail/';
+/**
+ * Outlook Web login URL.
+ *
+ * Microsoft is unifying authenticated Microsoft 365 apps under cloud.microsoft
+ * (see MC950871 / https://learn.microsoft.com/microsoft-365/enterprise/cloud-microsoft-domain).
+ * Outlook on the web is served from outlook.cloud.microsoft; legacy hosts such as
+ * outlook.office.com remain supported and redirect during the transition.
+ */
+export const OWA_URL = 'https://outlook.cloud.microsoft/mail/';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // API Base URLs
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Outlook REST API host, distinct from the web UI host (`OWA_URL`): cloud.microsoft is
+ * the authenticated app experience; REST + token audience remain `outlook.office.com`
+ * (see Outlook REST docs / `https://outlook.office.com/.default`).
+ */
 export const OWA_BASE = 'https://outlook.office.com';
 export const OWA_REST_V2 = `${OWA_BASE}/api/v2.0`;
 export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';

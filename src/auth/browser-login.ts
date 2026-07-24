@@ -147,7 +147,9 @@ async function extractAndCacheTokens(context: BrowserContext): Promise<string | 
     return null;
   }
 
-  const tokens = extractTokensFromLocalStorage(ls);
+  // Pass cookies so MSAL v4 encrypted localStorage entries can be decrypted
+  // via the msal.cache.encryption session cookie.
+  const tokens = await extractTokensFromLocalStorage(ls, state.cookies);
   if (!tokens) {
     logger.debug('Could not extract OWA tokens from localStorage');
     return null;

@@ -31,7 +31,7 @@ describe('extractTokensFromLocalStorage', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
-  it('extracts owa, graph, refresh tokens plus upn and tenant', () => {
+  it('extracts owa, graph, refresh tokens plus upn and tenant', async () => {
     const owaJwt = makeJwt({ exp: futureSec(), upn: 'me@x.com', tid: 'tenant-1' });
     const graphJwt = makeJwt({ exp: futureSec(), upn: 'me@x.com', tid: 'tenant-1' });
     const ls = [
@@ -49,7 +49,7 @@ describe('extractTokensFromLocalStorage', () => {
         value: entry({ secret: 'REFRESH', credentialType: 'RefreshToken', clientId: OWA_CLIENT_ID }),
       },
     ];
-    const result = extractTokensFromLocalStorage(ls);
+    const result = await extractTokensFromLocalStorage(ls);
     expect(result).not.toBeNull();
     expect(result!.owaToken).toBe(owaJwt);
     expect(result!.graphToken).toBe(graphJwt);
@@ -60,7 +60,7 @@ describe('extractTokensFromLocalStorage', () => {
     expect(result!.graphTokenExpiry).toBeInstanceOf(Date);
   });
 
-  it('keeps the owa token with the latest expiry', () => {
+  it('keeps the owa token with the latest expiry', async () => {
     const older = makeJwt({ exp: futureSec() });
     const newer = makeJwt({ exp: farFutureSec() });
     const ls = [
@@ -77,11 +77,11 @@ describe('extractTokensFromLocalStorage', () => {
         value: entry({ secret: 'R', clientId: OWA_CLIENT_ID }),
       },
     ];
-    const result = extractTokensFromLocalStorage(ls);
+    const result = await extractTokensFromLocalStorage(ls);
     expect(result!.owaToken).toBe(newer);
   });
 
-  it('falls back to preferred_username for upn', () => {
+  it('falls back to preferred_username for upn', async () => {
     const owaJwt = makeJwt({ exp: futureSec(), preferred_username: 'pref@x.com' });
     const ls = [
       {
@@ -93,12 +93,12 @@ describe('extractTokensFromLocalStorage', () => {
         value: entry({ secret: 'R', clientId: OWA_CLIENT_ID }),
       },
     ];
-    const result = extractTokensFromLocalStorage(ls);
+    const result = await extractTokensFromLocalStorage(ls);
     expect(result!.upn).toBe('pref@x.com');
     expect(result!.tenantId).toBeUndefined();
   });
 
-  it('skips non-msal keys, bad JSON, missing secret, wrong-client refresh, non-jwt and expired tokens', () => {
+  it('skips non-msal keys, bad JSON, missing secret, wrong-client refresh, non-jwt and expired tokens', async () => {
     const owaJwt = makeJwt({ exp: futureSec() });
     const ls = [
       { name: 'notmsal', value: 'whatever' },
@@ -112,22 +112,22 @@ describe('extractTokensFromLocalStorage', () => {
       { name: 'msal.3|a|x|accesstoken|c|t|badpayload', value: entry({ secret: 'ey.@@bad@@.sig', target: 'https://outlook.office.com/.default' }) },
       { name: 'msal.3|a|x|accesstoken|c|t|good', value: entry({ secret: owaJwt, target: 'https://outlook.office.com/.default' }) },
     ];
-    const result = extractTokensFromLocalStorage(ls);
+    const result = await extractTokensFromLocalStorage(ls);
     // No valid refresh token (wrong clientId), so extraction fails overall
     expect(result).toBeNull();
   });
 
-  it('returns null when there is no owa access token', () => {
+  it('returns null when there is no owa access token', async () => {
     const ls = [
       {
         name: 'msal.3|a|x|refreshtoken|c|||',
         value: entry({ secret: 'R', clientId: OWA_CLIENT_ID }),
       },
     ];
-    expect(extractTokensFromLocalStorage(ls)).toBeNull();
+    expect(await extractTokensFromLocalStorage(ls)).toBeNull();
   });
 
-  it('returns null when the refresh token is missing', () => {
+  it('returns null when the refresh token is missing', async () => {
     const owaJwt = makeJwt({ exp: futureSec() });
     const ls = [
       {
@@ -135,7 +135,7 @@ describe('extractTokensFromLocalStorage', () => {
         value: entry({ secret: owaJwt, target: 'https://outlook.office.com/.default' }),
       },
     ];
-    expect(extractTokensFromLocalStorage(ls)).toBeNull();
+    expect(await extractTokensFromLocalStorage(ls)).toBeNull();
   });
 });
 
@@ -148,6 +148,25 @@ describe('getOwaLocalStorage', () => {
       ],
     };
     expect(getOwaLocalStorage(state)).toEqual([{ name: 'b', value: '2' }]);
+  });
+
+  it('prefers outlook.cloud.microsoft over legacy office hosts', () => {
+    const state: StorageState = {
+      origins: [
+        { origin: 'https://outlook.office.com', localStorage: [{ name: 'legacy', value: '1' }] },
+        { origin: 'https://outlook.cloud.microsoft', localStorage: [{ name: 'cloud', value: '2' }] },
+      ],
+    };
+    expect(getOwaLocalStorage(state)).toEqual([{ name: 'cloud', value: '2' }]);
+  });
+
+  it('accepts outlook.office365.com as an OWA origin', () => {
+    const state: StorageState = {
+      origins: [
+        { origin: 'https://outlook.office365.com', localStorage: [{ name: 'c', value: '3' }] },
+      ],
+    };
+    expect(getOwaLocalStorage(state)).toEqual([{ name: 'c', value: '3' }]);
   });
 
   it('returns null when no owa origin is present', () => {
