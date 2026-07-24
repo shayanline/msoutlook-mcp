@@ -36,6 +36,19 @@ No Azure app registration. No admin consent. No client secrets. Your access is l
 
 ```json
 {
+  "mcpServers": {
+    "outlook": {
+      "command": "npx",
+      "args": ["-y", "msoutlook-mcp@latest"]
+    }
+  }
+}
+```
+
+The top-level key depends on your client. Most clients (Claude Desktop, Cursor, Windsurf) use `mcpServers` as shown above. VS Code's `.vscode/mcp.json` uses `servers` instead, so drop the block in as:
+
+```json
+{
   "servers": {
     "outlook": {
       "command": "npx",
