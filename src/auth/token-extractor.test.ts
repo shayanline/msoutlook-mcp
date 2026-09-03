@@ -60,6 +60,29 @@ describe('extractTokensFromLocalStorage', () => {
     expect(result!.graphTokenExpiry).toBeInstanceOf(Date);
   });
 
+  it('extracts the opaque consumer owa token with the latest MSAL expiry', async () => {
+    const earlierExpiry = futureSec();
+    const laterExpiry = farFutureSec();
+    const ls = [
+      {
+        name: 'msal.5|a|x|accesstoken|c|t|owa1',
+        value: entry({ secret: 'Ew-earlier', target: 'service::outlook.office.com::mbi_ssl', expiresOn: String(earlierExpiry) }),
+      },
+      {
+        name: 'msal.5|a|x|accesstoken|c|t|owa2',
+        value: entry({ secret: 'Ew-later', target: 'service::outlook.office.com::mbi_ssl', expiresOn: String(laterExpiry) }),
+      },
+      {
+        name: 'msal.5|a|x|refreshtoken|c|||',
+        value: entry({ secret: 'M.C531-refresh', clientId: OWA_CLIENT_ID }),
+      },
+    ];
+    const result = await extractTokensFromLocalStorage(ls);
+    expect(result).not.toBeNull();
+    expect(result!.owaToken).toBe('Ew-later');
+    expect(result!.owaTokenExpiry).toEqual(new Date(laterExpiry * 1000));
+  });
+
   it('keeps the owa token with the latest expiry', async () => {
     const older = makeJwt({ exp: futureSec() });
     const newer = makeJwt({ exp: farFutureSec() });

@@ -32,6 +32,7 @@ interface MsalEntry {
   secret: string;
   credentialType?: string;
   target?: string;
+  expiresOn?: string;
   realm?: string;
   homeAccountId?: string;
   clientId?: string;
@@ -117,9 +118,13 @@ export async function extractTokensFromLocalStorage(
 
     // ── Access Tokens ─────────────────────────────────────────────────────
     if (!key.includes('accesstoken')) continue;
-    if (!isJwt(entry.secret)) continue;
 
-    const expiry = getJwtExpiry(entry.secret);
+    const isOwaToken = entry.target?.includes('outlook.office.com') ?? false;
+    let expiry = isJwt(entry.secret) ? getJwtExpiry(entry.secret) : null;
+    if (!expiry && isOwaToken) {
+      const expiresOn = Number(entry.expiresOn);
+      if (Number.isFinite(expiresOn) && expiresOn > 0) expiry = new Date(expiresOn * 1000);
+    }
     if (!expiry) continue;
     if (expiry.getTime() <= Date.now()) continue; // skip expired
 
@@ -133,7 +138,7 @@ export async function extractTokensFromLocalStorage(
     }
 
     // OWA token — scope contains outlook.office.com
-    if (entry.target?.includes('outlook.office.com')) {
+    if (isOwaToken) {
       if (!bestOwaToken || expiry > bestOwaToken.expiry) {
         bestOwaToken = { token: entry.secret, expiry };
       }
