@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-03
+
+### Fixed
+- Consumer Outlook login now accepts opaque OWA access tokens and uses the MSAL `expiresOn` timestamp to validate their lifetime, so personal Microsoft accounts can save an authenticated session.
+
 ## [0.4.1] - 2026-07-24
 
 ### Fixed
@@ -44,7 +49,8 @@ All notable changes to this project are documented here. The format is based on
 
 See the [GitHub releases](https://github.com/shayanline/msoutlook-mcp/releases) for earlier history.
 
-[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.0...v0.3.1
