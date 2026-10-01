@@ -7,7 +7,7 @@
  */
 
 import { getOwaToken, getGraphToken } from '../auth/index.js';
-import { OWA_REST_V2, GRAPH_BASE, OWA_BASE } from '../constants.js';
+import { OWA_REST_V2, OWA_CLOUD_SETTINGS_BASE, GRAPH_BASE, OWA_BASE } from '../constants.js';
 import { getBearerHeaders, parseResponse, fetchWithRetry } from '../utils/http.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,6 +28,25 @@ export async function owaGet<T>(path: string, params?: Record<string, string>): 
     method: 'GET',
     headers: getBearerHeaders(token, OWA_BASE),
   });
+  return parseResponse<T>(res);
+}
+
+export async function owaCloudSettingsGet<T>(
+  path: string,
+  params?: Record<string, string>,
+  large = false,
+): Promise<T> {
+  const token = await getOwaToken();
+  if (!token) throw new Error('Not authenticated. Run outlook_login first.');
+
+  let url = `${OWA_CLOUD_SETTINGS_BASE}${path}`;
+  if (params) url += `?${new URLSearchParams(params).toString()}`;
+
+  const headers = {
+    ...getBearerHeaders(token, OWA_BASE),
+    ...(large ? { 'x-islargesetting': 'true' } : {}),
+  };
+  const res = await fetchWithRetry(url, { method: 'GET', headers });
   return parseResponse<T>(res);
 }
 

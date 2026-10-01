@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as mail from '../api/mail.js';
+import * as signatures from '../api/signatures.js';
 import { writeFile } from 'node:fs/promises';
 import { registerMailTools } from './mail-tools.js';
 
 vi.mock('node:fs/promises', () => ({ writeFile: vi.fn() }));
+vi.mock('../api/signatures.js', () => ({ applyOutlookSignature: vi.fn() }));
 vi.mock('../api/mail.js', () => ({
   listMessages: vi.fn(), getMessage: vi.fn(), sendEmail: vi.fn(), createDraft: vi.fn(),
   replyToMessage: vi.fn(), createReplyDraft: vi.fn(), createForwardDraft: vi.fn(),
@@ -35,7 +37,11 @@ const leanMsg = {
   Flag: { FlagStatus: 'NotFlagged' }, SentDateTime: '2024-02-02', BodyPreview: 'preview text',
 };
 
-beforeEach(() => { vi.clearAllMocks(); setup(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(signatures.applyOutlookSignature).mockImplementation(async body => body);
+  setup();
+});
 
 describe('outlook_list_emails', () => {
   it('lists with defaults and formats lean message', async () => {
@@ -104,6 +110,28 @@ describe('outlook_send_email', () => {
     const r = await tools.get('outlook_send_email')!.handler({ to: ['a@x.com', 'b@x.com'], subject: 's', body: 'b' });
     expect(text(r)).toBe('Email sent to a@x.com, b@x.com.');
   });
+
+  it('adds the selected new signature by default', async () => {
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('<div>body</div><div>signature</div>');
+
+    await tools.get('outlook_send_email')!.handler({
+      to: ['a@x.com'], subject: 's', body: '<div>body</div>', body_type: 'HTML',
+    });
+
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('<div>body</div>', 'new', 'HTML');
+    expect(mail.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      body: '<div>body</div><div>signature</div>',
+    }));
+  });
+
+  it('skips signature lookup when explicitly disabled', async () => {
+    await tools.get('outlook_send_email')!.handler({
+      to: ['a@x.com'], subject: 's', body: 'body', include_signature: false,
+    });
+
+    expect(signatures.applyOutlookSignature).not.toHaveBeenCalled();
+    expect(mail.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ body: 'body' }));
+  });
 });
 
 describe('outlook_create_draft', () => {
@@ -119,6 +147,18 @@ describe('outlook_create_draft', () => {
     const r = await tools.get('outlook_create_draft')!.handler({ to: ['a@x.com'], subject: 's', body: 'b' });
     expect(text(r)).toContain('d2');
   });
+
+  it('uses the text version of the new signature for text drafts', async () => {
+    vi.mocked(mail.createDraft).mockResolvedValue({ Id: 'd3', Subject: 's' } as any);
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('body\n\nsignature');
+
+    await tools.get('outlook_create_draft')!.handler({
+      to: ['a@x.com'], subject: 's', body: 'body', body_type: 'Text',
+    });
+
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('body', 'new', 'Text');
+    expect(mail.createDraft).toHaveBeenCalledWith(expect.objectContaining({ body: 'body\n\nsignature' }));
+  });
 });
 
 describe('simple action tools', () => {
@@ -129,25 +169,35 @@ describe('simple action tools', () => {
   });
   it('reply default and reply_all', async () => {
     vi.mocked(mail.replyToMessage).mockResolvedValue(undefined as any);
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('signed');
     await tools.get('outlook_reply')!.handler({ id: 'm', body: 'b' });
-    expect(mail.replyToMessage).toHaveBeenCalledWith('m', 'b', false);
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('b', 'reply', 'HTML');
+    expect(mail.replyToMessage).toHaveBeenCalledWith('m', 'signed', false);
     await tools.get('outlook_reply')!.handler({ id: 'm', body: 'b', reply_all: true });
-    expect(mail.replyToMessage).toHaveBeenCalledWith('m', 'b', true);
+    expect(mail.replyToMessage).toHaveBeenCalledWith('m', 'signed', true);
   });
   it('create_reply_draft', async () => {
     vi.mocked(mail.createReplyDraft).mockResolvedValue({ Id: 'r', Subject: 's' } as any);
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('signed');
     expect(text(await tools.get('outlook_create_reply_draft')!.handler({ id: 'm', body: 'b', reply_all: true }))).toContain('Reply draft created');
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('b', 'reply', 'HTML');
+    expect(mail.createReplyDraft).toHaveBeenCalledWith('m', 'signed', true);
   });
   it('create_forward_draft with and without comment', async () => {
     vi.mocked(mail.createForwardDraft).mockResolvedValue({ Id: 'f', Subject: 's' } as any);
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('signed');
     await tools.get('outlook_create_forward_draft')!.handler({ id: 'm', to: ['a@x.com'], comment: 'hi' });
-    expect(mail.createForwardDraft).toHaveBeenCalledWith('m', 'hi', ['a@x.com']);
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('hi', 'reply', 'HTML');
+    expect(mail.createForwardDraft).toHaveBeenCalledWith('m', 'signed', ['a@x.com']);
     await tools.get('outlook_create_forward_draft')!.handler({ id: 'm' });
-    expect(mail.createForwardDraft).toHaveBeenCalledWith('m', '', undefined);
+    expect(mail.createForwardDraft).toHaveBeenCalledWith('m', 'signed', undefined);
   });
   it('forward', async () => {
     vi.mocked(mail.forwardMessage).mockResolvedValue(undefined as any);
+    vi.mocked(signatures.applyOutlookSignature).mockResolvedValue('signed');
     expect(text(await tools.get('outlook_forward')!.handler({ id: 'm', to: ['a@x.com'], comment: 'c' }))).toContain('Forwarded to a@x.com');
+    expect(signatures.applyOutlookSignature).toHaveBeenCalledWith('c', 'reply', 'HTML');
+    expect(mail.forwardMessage).toHaveBeenCalledWith('m', ['a@x.com'], 'signed');
   });
   it('mark_read true/false', async () => {
     vi.mocked(mail.markMessageRead).mockResolvedValue(undefined as any);

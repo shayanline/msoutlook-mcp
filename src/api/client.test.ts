@@ -14,10 +14,10 @@ vi.mock('../utils/http.js', () => ({
 import { getOwaToken, getGraphToken } from '../auth/index.js';
 import { getBearerHeaders, parseResponse, fetchWithRetry } from '../utils/http.js';
 import {
-  owaGet, owaPost, owaPatch, owaDelete,
+  owaGet, owaPost, owaPatch, owaDelete, owaCloudSettingsGet,
   graphGet, graphPost, graphGetPath, graphGetBinary,
 } from './client.js';
-import { OWA_REST_V2, GRAPH_BASE, OWA_BASE } from '../constants.js';
+import { OWA_REST_V2, OWA_CLOUD_SETTINGS_BASE, GRAPH_BASE, OWA_BASE } from '../constants.js';
 
 const mGetOwaToken = vi.mocked(getOwaToken);
 const mGetGraphToken = vi.mocked(getGraphToken);
@@ -72,6 +72,32 @@ describe('owaGet', () => {
 
     const url = mFetchWithRetry.mock.calls[0][0] as string;
     expect(url).toBe(`${OWA_REST_V2}/me/messages?foo=bar&a=b`);
+  });
+});
+
+describe('owaCloudSettingsGet', () => {
+  it('throws when not authenticated', async () => {
+    mGetOwaToken.mockResolvedValue(null as unknown as string);
+    await expect(owaCloudSettingsGet('/settings')).rejects.toThrow('Not authenticated. Run outlook_login first.');
+    expect(mFetchWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('fetches cloud settings and requests large values when needed', async () => {
+    mGetOwaToken.mockResolvedValue('tok');
+    mFetchWithRetry.mockResolvedValue({} as Response);
+    mParseResponse.mockResolvedValue([{ name: 'Reply' }]);
+
+    const result = await owaCloudSettingsGet('/settings/account', { settingname: 'Reply' }, true);
+
+    expect(result).toEqual([{ name: 'Reply' }]);
+    expect(mGetBearerHeaders).toHaveBeenCalledWith('tok', OWA_BASE);
+    expect(mFetchWithRetry).toHaveBeenCalledWith(
+      `${OWA_CLOUD_SETTINGS_BASE}/settings/account?settingname=Reply`,
+      {
+        method: 'GET',
+        headers: { Authorization: 'Bearer x', 'x-islargesetting': 'true' },
+      },
+    );
   });
 });
 

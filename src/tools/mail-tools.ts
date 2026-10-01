@@ -35,6 +35,16 @@ import {
   type Message,
   type Attachment,
 } from '../api/mail.js';
+import { applyOutlookSignature, type SignatureFormat, type SignatureKind } from '../api/signatures.js';
+
+async function withSignature(
+  body: string,
+  kind: SignatureKind,
+  format: SignatureFormat,
+  include: boolean | undefined,
+): Promise<string> {
+  return include === false ? body : applyOutlookSignature(body, kind, format);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -170,7 +180,7 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_send_email ───────────────────────────────────────────────────
   server.tool(
     'outlook_send_email',
-    'Send an email immediately. Body format defaults to HTML (body_type HTML). Prefer the review first flow: unless the user has asked to send straight away, create the message with outlook_create_draft so they can review it, then send with outlook_send_draft once approved. Always confirm content with the user before calling this tool. Write structure with HTML (<br> for a line break, <br><br> for a paragraph gap, <ul><li>...</li></ul> for lists). Plain text is still accepted and its newlines are converted to <br> automatically, so a multi line message never arrives as one block.',
+    'Send an email immediately. The selected Outlook new message signature is added by default; pass include_signature false to omit it. Body format defaults to HTML (body_type HTML). Prefer the review first flow: unless the user has asked to send straight away, create the message with outlook_create_draft so they can review it, then send with outlook_send_draft once approved. Always confirm content with the user before calling this tool. Write structure with HTML (<br> for a line break, <br><br> for a paragraph gap, <ul><li>...</li></ul> for lists). Plain text is still accepted and its newlines are converted to <br> automatically, so a multi line message never arrives as one block.',
     {
       to: z.array(z.string().email()).describe('List of recipient email addresses'),
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
@@ -180,15 +190,17 @@ export function registerMailTools(server: McpServer): void {
       body_type: z.enum(['Text', 'HTML']).optional().describe('Body format. Default: HTML, which is recommended so line breaks render. Only use Text to send a literal plain text body with no auto formatting.'),
       importance: z.enum(['Low', 'Normal', 'High']).optional().describe('Email importance (default: Normal)'),
       attachments: z.array(z.string()).optional().describe('Local file paths to attach. Each file is read from disk and attached.'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook signature (default: true)"),
     },
-    async ({ to, cc, bcc, subject, body, body_type, importance, attachments }) => {
+    async ({ to, cc, bcc, subject, body, body_type, importance, attachments, include_signature }) => {
       const files = attachments?.length ? await Promise.all(attachments.map(fileToAttachment)) : undefined;
+      const content = await withSignature(body, 'new', body_type ?? 'HTML', include_signature);
       await sendEmail({
         to,
         cc,
         bcc,
         subject,
-        body,
+        body: content,
         bodyType: body_type,
         importance,
         attachments: files,
@@ -201,7 +213,7 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_create_draft ─────────────────────────────────────────────────
   server.tool(
     'outlook_create_draft',
-    'Create a draft email without sending it. This is the preferred way to compose a new email: create the draft here so the user can review it in Outlook, then send it with outlook_send_draft once they approve, unless the user has asked to send straight away. Body format defaults to HTML (body_type HTML): use HTML for layout (<br>, <br><br>, <ul><li>). Plain text newlines are auto converted to <br> so the draft keeps its line breaks.',
+    'Create a draft email without sending it. The selected Outlook new message signature is added by default; pass include_signature false to omit it. This is the preferred way to compose a new email: create the draft here so the user can review it in Outlook, then send it with outlook_send_draft once they approve, unless the user has asked to send straight away. Body format defaults to HTML (body_type HTML): use HTML for layout (<br>, <br><br>, <ul><li>). Plain text newlines are auto converted to <br> so the draft keeps its line breaks.',
     {
       to: z.array(z.string().email()).describe('Recipient email addresses'),
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
@@ -209,10 +221,12 @@ export function registerMailTools(server: McpServer): void {
       body: z.string().describe('Email body. Prefer HTML markup for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
       body_type: z.enum(['Text', 'HTML']).optional().describe('Body format. Default: HTML. Only use Text for a literal plain text body with no auto formatting.'),
       attachments: z.array(z.string()).optional().describe('Local file paths to attach to the draft.'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook signature (default: true)"),
     },
-    async ({ to, cc, subject, body, body_type, attachments }) => {
+    async ({ to, cc, subject, body, body_type, attachments, include_signature }) => {
       const files = attachments?.length ? await Promise.all(attachments.map(fileToAttachment)) : undefined;
-      const draft = await createDraft({ to, cc, subject, body, bodyType: body_type, attachments: files });
+      const content = await withSignature(body, 'new', body_type ?? 'HTML', include_signature);
+      const draft = await createDraft({ to, cc, subject, body: content, bodyType: body_type, attachments: files });
       return {
         content: [{
           type: 'text',
@@ -238,14 +252,16 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_reply ────────────────────────────────────────────────────────
   server.tool(
     'outlook_reply',
-    'Reply to an email, staying in the same thread and keeping all recipients when reply_all is true. This sends immediately, there is no separate reply draft, so confirm the content with the user before calling unless they have asked to send straight away. The reply is always rendered as HTML, so use HTML for layout (<br>, <br><br>, <ul><li>). Plain text is accepted and its newlines are auto converted to <br>, so a multi paragraph reply never collapses into one block.',
+    'Reply to an email, staying in the same thread and keeping all recipients when reply_all is true. The selected Outlook reply signature is added by default; pass include_signature false to omit it. This sends immediately, there is no separate reply draft, so confirm the content with the user before calling unless they have asked to send straight away. The reply is always rendered as HTML, so use HTML for layout (<br>, <br><br>, <ul><li>). Plain text is accepted and its newlines are auto converted to <br>, so a multi paragraph reply never collapses into one block.',
     {
       id: z.string().describe('Message ID to reply to'),
       body: z.string().describe('Reply body. Prefer HTML markup (<br>, <ul><li>) for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
       reply_all: z.boolean().optional().describe('If true, reply to all recipients and keep every CC on the thread (default: false)'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook reply signature (default: true)"),
     },
-    async ({ id, body, reply_all }) => {
-      await replyToMessage(id, body, reply_all ?? false);
+    async ({ id, body, reply_all, include_signature }) => {
+      const content = await withSignature(body, 'reply', 'HTML', include_signature);
+      await replyToMessage(id, content, reply_all ?? false);
       return { content: [{ type: 'text', text: 'Reply sent.' }] };
     },
   );
@@ -253,14 +269,16 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_create_reply_draft ───────────────────────────────────────────
   server.tool(
     'outlook_create_reply_draft',
-    'Create a reply (or reply-all) as a DRAFT instead of sending it. This is the review-first way to reply: the draft is saved to Drafts with the recipients and quoted original prefilled and your text inserted above the quote, so the user can review or edit it in Outlook, then send it with outlook_send_draft once approved. Prefer this over outlook_reply unless the user has asked to send straight away. Body is rendered as HTML: use HTML for layout (<br>, <br><br>, <ul><li>); plain text newlines are auto converted to <br>.',
+    'Create a reply (or reply-all) as a DRAFT instead of sending it. The selected Outlook reply signature is added by default; pass include_signature false to omit it. This is the review-first way to reply: the draft is saved to Drafts with the recipients and quoted original prefilled and your text inserted above the quote, so the user can review or edit it in Outlook, then send it with outlook_send_draft once approved. Prefer this over outlook_reply unless the user has asked to send straight away. Body is rendered as HTML: use HTML for layout (<br>, <br><br>, <ul><li>); plain text newlines are auto converted to <br>.',
     {
       id: z.string().describe('Message ID to reply to'),
       body: z.string().describe('Reply body. Prefer HTML markup (<br>, <ul><li>) for layout. Plain text is fine too: its newlines are auto converted to <br>.'),
       reply_all: z.boolean().optional().describe('If true, reply to all recipients and keep every CC on the thread (default: false)'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook reply signature (default: true)"),
     },
-    async ({ id, body, reply_all }) => {
-      const draft = await createReplyDraft(id, body, reply_all ?? false);
+    async ({ id, body, reply_all, include_signature }) => {
+      const content = await withSignature(body, 'reply', 'HTML', include_signature);
+      const draft = await createReplyDraft(id, content, reply_all ?? false);
       return {
         content: [{
           type: 'text',
@@ -273,14 +291,16 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_create_forward_draft ─────────────────────────────────────────
   server.tool(
     'outlook_create_forward_draft',
-    'Create a forward as a DRAFT instead of sending it. The draft is saved to Drafts with the quoted original prefilled; recipients can be set here or added later in Outlook. Review or edit, then send with outlook_send_draft. Body is rendered as HTML: use HTML for layout; plain text newlines are auto converted to <br>.',
+    'Create a forward as a DRAFT instead of sending it. The selected Outlook reply signature is added by default; pass include_signature false to omit it. The draft is saved to Drafts with the quoted original prefilled; recipients can be set here or added later in Outlook. Review or edit, then send with outlook_send_draft. Body is rendered as HTML: use HTML for layout; plain text newlines are auto converted to <br>.',
     {
       id: z.string().describe('Message ID to forward'),
       to: z.array(z.string().email()).optional().describe('Optional recipients to prefill on the forward draft'),
       comment: z.string().optional().describe('Optional message to add above the forwarded content. HTML preferred; plain text newlines are auto converted to <br>.'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook reply signature (default: true)"),
     },
-    async ({ id, to, comment }) => {
-      const draft = await createForwardDraft(id, comment ?? '', to);
+    async ({ id, to, comment, include_signature }) => {
+      const content = await withSignature(comment ?? '', 'reply', 'HTML', include_signature);
+      const draft = await createForwardDraft(id, content, to);
       return {
         content: [{
           type: 'text',
@@ -293,14 +313,16 @@ export function registerMailTools(server: McpServer): void {
   // ── outlook_forward ──────────────────────────────────────────────────────
   server.tool(
     'outlook_forward',
-    'Forward an email to one or more recipients.',
+    'Forward an email to one or more recipients. The selected Outlook reply signature is added by default; pass include_signature false to omit it.',
     {
       id: z.string().describe('Message ID to forward'),
       to: z.array(z.string().email()).describe('Forward to these addresses'),
       comment: z.string().optional().describe('Optional message to include with the forward. Rendered as HTML: use HTML for layout, or plain text whose newlines are auto converted to <br>.'),
+      include_signature: z.boolean().optional().describe("Add the user's selected Outlook reply signature (default: true)"),
     },
-    async ({ id, to, comment }) => {
-      await forwardMessage(id, to, comment);
+    async ({ id, to, comment, include_signature }) => {
+      const content = await withSignature(comment ?? '', 'reply', 'HTML', include_signature);
+      await forwardMessage(id, to, content);
       return { content: [{ type: 'text', text: `Forwarded to ${to.join(', ')}.` }] };
     },
   );

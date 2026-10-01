@@ -43,6 +43,7 @@ export const OWA_URL = 'https://outlook.cloud.microsoft/mail/';
  */
 export const OWA_BASE = 'https://outlook.office.com';
 export const OWA_REST_V2 = `${OWA_BASE}/api/v2.0`;
+export const OWA_CLOUD_SETTINGS_BASE = 'https://outlook.cloud.microsoft/ows/v1/OutlookCloudSettings';
 export const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 // ─────────────────────────────────────────────────────────────────────────────
