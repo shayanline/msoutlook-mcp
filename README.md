@@ -67,6 +67,7 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 ## Sending mail: behaviour to know
 
 - **HTML by default.** `outlook_send_email`, `outlook_create_draft`, and the reply/forward tools render their body as HTML, so use `<br>`, `<br><br>`, and `<ul><li>` for structure. Plain text is still accepted: its newlines are converted to `<br>` automatically, so a message never arrives as one collapsed block.
+- **Outlook signatures by default.** New messages use the signature selected in Outlook for new mail. Replies and forwards use the selected reply signature. The complete stored HTML is preserved, including embedded images and links. Pass `include_signature: false` to any composition tool to omit it. If no signature is selected or Outlook's internal settings endpoint is unavailable, composition continues without a signature.
 - **Review before sending.** Prefer the draft tools (`outlook_create_draft`, `outlook_create_reply_draft`, `outlook_create_forward_draft`) so you can review or edit with `outlook_update_draft` and then send with `outlook_send_draft`. The immediate tools (`outlook_send_email`, `outlook_reply`, `outlook_forward`) send straight away.
 - **Presence caveat.** `outlook_get_availability` reports free/busy and out of office, which is what Outlook can read. The live Teams presence dot (Available / Away / DoNotDisturb) needs a Teams token and is not available here.
 
@@ -88,14 +89,14 @@ Then run `outlook_login` from your MCP client. On first use a browser opens so y
 | `outlook_get_email` | Read full email content by ID |
 | `outlook_get_unread` | Get unread emails from Inbox |
 | `outlook_search_emails` | Search emails by keyword, with optional received date range and pagination. Omit the keyword to list everything in a date range |
-| `outlook_send_email` | Send an email (HTML body by default; plain text newlines auto convert to `<br>`; supports file `attachments`) |
-| `outlook_create_draft` | Create a new draft without sending (review-first flow; supports file `attachments`) |
+| `outlook_send_email` | Send an email with the selected new mail signature by default (HTML body by default, supports file `attachments`) |
+| `outlook_create_draft` | Create a new draft with the selected new mail signature by default (review first flow, supports file `attachments`) |
 | `outlook_send_draft` | Send a previously created draft |
 | `outlook_update_draft` | Edit a draft's subject, recipients, body, or importance |
-| `outlook_reply` | Reply to an email immediately (or reply all) |
-| `outlook_create_reply_draft` | Create a reply (or reply all) as a draft to review before sending |
-| `outlook_forward` | Forward an email immediately |
-| `outlook_create_forward_draft` | Create a forward as a draft to review before sending |
+| `outlook_reply` | Reply immediately with the selected reply signature by default (or reply all) |
+| `outlook_create_reply_draft` | Create a reply with the selected reply signature by default as a draft to review before sending |
+| `outlook_forward` | Forward immediately with the selected reply signature by default |
+| `outlook_create_forward_draft` | Create a forward with the selected reply signature by default as a draft to review before sending |
 | `outlook_add_attachment` | Attach a local file to an existing draft |
 | `outlook_list_attachments` | List attachments on an email |
 | `outlook_save_attachment` | Download an attachment to a local file |
