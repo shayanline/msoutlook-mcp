@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
+### Added
+- Outgoing email tools now read and apply the signatures selected in Outlook. New emails and drafts use the new mail signature, while replies and forwards use the reply signature.
+- Every composition tool accepts `include_signature: false` when a message should omit the selected signature.
+
+### Changed
+- Complete signature HTML is preserved, including embedded images and booking links.
+- Legacy Outlook signatures are supported when roaming signatures are unavailable. Email composition continues without a signature when Outlook's internal settings endpoint cannot be reached.
+
 ## [0.4.2] - 2026-09-03
 
 ### Fixed
@@ -49,7 +59,8 @@ All notable changes to this project are documented here. The format is based on
 
 See the [GitHub releases](https://github.com/shayanline/msoutlook-mcp/releases) for earlier history.
 
-[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/shayanline/msoutlook-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/shayanline/msoutlook-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/shayanline/msoutlook-mcp/compare/v0.3.1...v0.4.0
